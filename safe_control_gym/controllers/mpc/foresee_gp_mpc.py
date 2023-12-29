@@ -35,7 +35,7 @@ from safe_control_gym.controllers.mpc.gp_utils import GaussianProcessCollection,
 from safe_control_gym.envs.benchmark_env import Task
 
 # New
-from utils.foresee_utils import *
+from safe_control_gym.controllers.mpc.foresee_utils import *
 
 
 class FORESEE_GPMPC(MPC):
