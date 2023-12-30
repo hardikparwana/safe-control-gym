@@ -417,27 +417,27 @@ class FORESEE_GPMPC(MPC):
                 z = cs.vertcat(x_var[j*nx:(j+1)*nx,t], u_var[:,t])
                 pred = self.gaussian_process.casadi_predict(z=z)
                 cov = self.Bd @ pred['covariance'] @ self.Bd.T
-                mu = pred['mean'] + self.prior_dynamics_func(x0=x_var[:, i]-self.prior_ctrl.X_LIN[:,None],
-                                                        p=u_var[:, i]-self.prior_ctrl.U_LIN[:,None])['xf'] + \
+                mu = pred['mean'] + self.prior_dynamics_func(x0=x_var[j*nx:(j+1)*nx,t]-self.prior_ctrl.X_LIN[:,None],
+                                                        p=u_var[:, t]-self.prior_ctrl.U_LIN[:,None])['xf'] + \
                                 self.prior_ctrl.X_LIN[:,None]
-                root_term = get_ut_cov_root_diagonal(cov) 
+                root_term = get_ut_cov_root_diagonal(cov)  #np.zeros((6,6)) #get_ut_cov_root_diagonal(cov) 
                 new_points, temp_weights = generate_sigma_points_gaussian( mu, root_term, x_var[j*nx:(j+1)*nx,t], 1.0 )
                 new_weights = temp_weights * weights_var[j,t]                    
                 for j in range(1,2*nx+1):
                     z = cs.vertcat(x_var[j*nx:(j+1)*nx,t], u_var[:,t])
                     pred = self.gaussian_process.casadi_predict(z=z)
                     cov = self.Bd @ pred['covariance'] @ self.Bd.T
-                    mu = pred['mean'] + self.prior_dynamics_func(x0=x_var[:, i]-self.prior_ctrl.X_LIN[:,None],
-                                                        p=u_var[:, i]-self.prior_ctrl.U_LIN[:,None])['xf'] + \
+                    mu = pred['mean'] + self.prior_dynamics_func(x0=x_var[j*nx:(j+1)*nx,t]-self.prior_ctrl.X_LIN[:,None],
+                                                        p=u_var[:, t]-self.prior_ctrl.U_LIN[:,None])['xf'] + \
                                 self.prior_ctrl.X_LIN[:,None]
-                    root_term = get_ut_cov_root_diagonal(cov) 
-                    root_term = get_ut_cov_root_diagonal(cov)           
+                    root_term = get_ut_cov_root_diagonal(cov)   #np.zeros((6,6))# get_ut_cov_root_diagonal(cov)        
                     temp_points, temp_weights = generate_sigma_points_gaussian( mu, root_term, x_var[j*nx:(j+1)*nx,t], 1.0 )                    
                     new_points = cd.hcat([ new_points, temp_points ])
-                    new_weights = cd.hcat([ new_weights, temp_weights * weights_var[j,i]  ])
+                    new_weights = cd.hcat([ new_weights, temp_weights * weights_var[j,t]  ])
 
                 # Sigma Point Compress
-                compressed_sigma_points, compressed_weights = sigma_point_compress_GenUT(new_points, new_weights)
+                compressed_sigma_points, compressed_weights = sigma_point_compress(new_points, new_weights)
+                # compressed_sigma_points = cs.reshape(x_var[:,t], nx, 2*nx+1)
 
             # GP Dynamics constraint as in FORESEE
             opti.subject_to( x_var[:, t+1] == cs.reshape(compressed_sigma_points, -1,1) )
@@ -456,20 +456,26 @@ class FORESEE_GPMPC(MPC):
             # opti.subject_to(x_var[:, i + 1] == next_state)
 
             # Probabilistic state and input constraints according to Hewing 2019 constraint tightening.
-            for s_i, state_constraint in enumerate(self.state_constraints_sym):
-                # opti.subject_to(state_constraint(x_var[:, t]) <= state_constraint_set[s_i][:,t])
-                opti.subject_to(state_constraint(get_mean(cs.reshape(x_var[:, t], nx, 2*nx+1))) <= state_constraint_set[s_i][:,t])
+            # for s_i, state_constraint in enumerate(self.state_constraints_sym):
+            #     # opti.subject_to(state_constraint(x_var[:, t]) <= state_constraint_set[s_i][:,t])
+            #     opti.subject_to(state_constraint(get_mean(cs.reshape(x_var[:, t], nx, 2*nx+1), cs.reshape(weights_var[:,t], 1, -1))) <= state_constraint_set[s_i][:,t])
             for u_i, input_constraint in enumerate(self.input_constraints_sym):
                 opti.subject_to(input_constraint(u_var[:, t]) <= input_constraint_set[u_i][:,t])
 
 
         # Final state constraints.
-        for s_i, state_constraint in enumerate(self.state_constraints_sym):
-            opti.subject_to(state_constraint(get_mean(cs.reshape(x_var[:, -1], nx, 2*nx+1))) <= state_constraint_set[s_i][:,-1])
+        # for s_i, state_constraint in enumerate(self.state_constraints_sym):
+        #     opti.subject_to(state_constraint(get_mean(cs.reshape(x_var[:, -1], nx, 2*nx+1), cs.reshape(weights_var[:,-1], 1, -1))) <= state_constraint_set[s_i][:,-1])
 
         # Initial condition constraints.
         opti.subject_to(x_var[:, 0] == x_init)
         opti.subject_to(weights_var[:, 0] == weights_init)
+
+
+        # Bound on the value of weights
+        opti.subject_to( cs.vec(weights_var) <= 1000 )
+        opti.subject_to( cs.vec(weights_var) >= -1000 )
+
         # Create solver (IPOPT solver in this version).
         opts = {"ipopt.print_level": 4,
                 "ipopt.sb": "yes",
@@ -521,7 +527,7 @@ class FORESEE_GPMPC(MPC):
         # opti.set_value( x_init, cs.reshape(sigma_points_init, -1, 1) )
         # opti.set_value( weights_init, cs.reshape(sigma_weights_init, -1,1) )
         opti.set_value( x_init, np.repeat(obs.reshape(-1,1), 2*self.model.nx+1, axis=0) )
-        opti.set_value( weights_init, np.ones((2*self.model.nx,1)) )
+        opti.set_value( weights_init, np.ones((2*self.model.nx+1,1)) )
 
 
 
@@ -556,12 +562,12 @@ class FORESEE_GPMPC(MPC):
             sol = opti.solve()
             x_val, weights_val, u_val = sol.value(x_var), sol.value(weights_var), sol.value(u_var)
         except RuntimeError:
-            x_val, weights_val, u_val = opti.debug.value(x_var), opti.debug_value(weights_var), opti.debug.value(u_var)
+            x_val, weights_val, u_val = opti.debug.value(x_var), opti.debug.value(weights_var), opti.debug.value(u_var)
         u_val = np.atleast_2d(u_val)
 
-        x_val_mu = get_mean( cs.reshape(x_val[:,0], self.model.nx, 2*self.model.nx+1) )
+        x_val_mu = get_mean( cs.reshape(x_val[:,0], self.model.nx, 2*self.model.nx+1), cs.reshape( weights_val[:,0], 1, -1 ) )
         for t in range(1,self.T+1):
-            x_val_mu = np.append( x_val_mu, get_mean( cs.reshape(x_val[:,t], self.model.nx, 2*self.model.nx+1) ), axis=1 )
+            x_val_mu = np.append( x_val_mu, get_mean( cs.reshape(x_val[:,t], self.model.nx, 2*self.model.nx+1), cs.reshape( weights_val[:,t], 1, -1 ) ), axis=1 )
 
         self.x_prev = x_val_mu
         self.u_prev = u_val
@@ -575,7 +581,7 @@ class FORESEE_GPMPC(MPC):
         zi = np.hstack((x_val[:,0], u_val[:,0]))
         pred, _, _ = self.gaussian_process.predict(zi[None,:])
         print("True GP value: %s" % pred.numpy())
-        lin_pred = self.prior_dynamics_func(x0=x_val[:,0]-self.prior_ctrl.X_LIN,
+        lin_pred = self.prior_dynamics_func(x0=x_val_mu[:,0]-self.prior_ctrl.X_LIN,
                                             p=u_val[:, 0]-self.prior_ctrl.U_LIN)['xf'].toarray() + \
                                             self.prior_ctrl.X_LIN[:,None]
         self.results_dict['linear_pred'].append(lin_pred)

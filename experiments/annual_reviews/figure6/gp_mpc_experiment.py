@@ -38,6 +38,7 @@ def plot_xz_comparison_diag_constraint(prior_run,
     ax.set_ylim([-0.05, 1.1])
     ax.set_box_aspect(0.5)
     plt.tight_layout()
+    plt.savefig(dir+"comparison.png")
 
 
 def plot_2D_comparison_with_prior(state_inds,
@@ -176,6 +177,8 @@ if __name__ == "__main__":
 
     # Learn the gp by collecting training points.
     ctrl.learn()
+    # input("Press any key to continue.. ")
+    print("Press any key to continue.. ")
     if not config.train_only:
         # Run with the learned gp model.
 
@@ -185,5 +188,5 @@ if __name__ == "__main__":
         # Plot the results.
         prior_run = munch.munchify(prior_results)
         run = munch.munchify(run_results)
-        plot_xz_comparison_diag_constraint(prior_run, run, 1)
+        plot_xz_comparison_diag_constraint(prior_run, run, 1, dir=config.image_dir)
         plt.show()

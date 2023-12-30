@@ -53,6 +53,7 @@ class ConfigFactory:
                           nargs='+',
                           type=str,
                           help="override key-value pairs")
+        self.add_argument("--image_dir", type=str, help='directory to store images')
 
     def merge(self):
         """Creates experiment config object from command line and config files.

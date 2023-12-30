@@ -319,13 +319,16 @@ class GaussianProcessCollection:
         Ny = len(self.target_mask)
         z = ca.SX.sym('z1', Nz)
         y = ca.SX.zeros(Ny)
+        y_cov = ca.SX.zeros(Ny, Ny)
         for gp_ind, gp in enumerate(self.gp_list):
-            y[gp_ind] = gp.casadi_predict(z=z)['mean']
+            pred = gp.casadi_predict(z=z)
+            y[gp_ind] = pred['mean']
+            y_cov[gp_ind, gp_ind] = pred['covariance']
         casadi_predict = ca.Function('pred',
                                      [z],
-                                     [y],
+                                     [y, y_cov],
                                      ['z'],
-                                     ['mean'])
+                                     ['mean', 'covariance'])
         return casadi_predict
 
 
@@ -661,11 +664,18 @@ class GaussianProcess:
                                  [covSEard(z, train_inputs.T, lengthscale.T, output_scale)],
                                  ['z'],
                                  ['K'])
+        
+        K_z_z = ca.Function('k_z_z',
+                                 [z],
+                                 [covSEard(z, z, lengthscale.T, output_scale)],
+                                 ['z'],
+                                 ['K'])
+
         predict = ca.Function('pred',
                               [z],
-                              [K_z_ztrain(z=z)['K'] @ self.model.K_plus_noise_inv.detach().numpy() @ train_targets],
+                              [K_z_ztrain(z=z)['K'] @ self.model.K_plus_noise_inv.detach().numpy() @ train_targets, K_z_z(z=z)['K'] - K_z_ztrain(z=z)['K'] @ self.model.K_plus_noise_inv.detach().numpy() @ K_z_ztrain(z=z)['K'].T  ],
                               ['z'],
-                              ['mean'])
+                              ['mean', 'covariance'])
         return predict
 
     def plot_trained_gp(self,
