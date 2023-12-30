@@ -71,7 +71,7 @@ def plot_2D_comparison_with_prior(state_inds,
         np.savetxt(os.path.join(dir, 'linear_mpc_horizon.csv'), prior_horizon_states[state_inds].T, delimiter=',',
                    header='x_linear-horizon,y_linear-horizon')
         run_ellipse_data = np.zeros((horizon_cov.shape[0], 2+1+1+1))
-    for i in range(horizon_cov.shape[0]):
+    for i in range(horizon_cov.shape[0]): # time horizon
         cov = np.zeros((2, 2))
         cov[0,0] = horizon_cov[i, state_inds[0], state_inds[0]]
         cov[0,1] = horizon_cov[i, state_inds[0], state_inds[1]]
@@ -183,7 +183,7 @@ if __name__ == "__main__":
         # Run with the learned gp model.
 
         run_results = ctrl.run(env=test_env,
-                               max_steps=50)
+                               max_steps=10)  #50)
         ctrl.close()
         # Plot the results.
         prior_run = munch.munchify(prior_results)
