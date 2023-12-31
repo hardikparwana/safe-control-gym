@@ -151,6 +151,9 @@ class FORESEE_GPMPC2(MPC):
             self.target_mask = target_mask
         Bd = np.eye(self.model.nx)
         self.Bd = Bd[:, self.target_mask]
+
+        # print(f"Bd: {self.Bd}")
+        # exit()
         self.gp_approx = gp_approx
         self.online_learning = online_learning
         self.last_obs = None
@@ -430,21 +433,22 @@ class FORESEE_GPMPC2(MPC):
                 z = cs.vertcat(sigma_points[:,j], u_var[:,t])
                 pred = self.gaussian_process.casadi_predict(z=z)
                 # cov = self.Bd @ pred['covariance'] @ self.Bd.T
-                mu = cs.reshape(pred['mean'], -1,1) + cs.reshape(self.prior_dynamics_func(x0=sigma_points[:,j]-self.prior_ctrl.X_LIN[:,None],
-                                                        p=cs.reshape(u_var[:, t],2,1)-self.prior_ctrl.U_LIN[:,None])['xf'], -1,1) + \
-                                cs.reshape(self.prior_ctrl.X_LIN[:,None], -1,1)
+                mu = self.Bd @ cs.reshape(pred['mean'], 6,1) + cs.reshape(self.prior_dynamics_func(x0=cs.reshape(sigma_points[:,j]-self.prior_ctrl.X_LIN[:,None],6,1),
+                                                        p=cs.reshape(u_var[:, t],2,1)-self.prior_ctrl.U_LIN[:,None])['xf'], 6,1) + \
+                                cs.reshape(self.prior_ctrl.X_LIN[:,None], 6,1)
                 root_term = np.zeros((6,6)) #get_ut_cov_root_diagonal(cov)  #np.zeros((6,6)) #get_ut_cov_root_diagonal(cov) 
-                new_points, temp_weights = generate_sigma_points_gaussian( mu, root_term, cs.reshape(sigma_points[:,j], -1,1), 1.0 )
+                # new_points, temp_weights = generate_sigma_points_gaussian( mu, root_term, cs.reshape(sigma_points[:,j], -1,1), 1.0 )
+                new_points, temp_weights = generate_sigma_points_gaussian( mu, root_term, np.zeros((nx,1)), 1.0 )
                 new_weights = temp_weights * weights[:,j]                    
                 for j in range(1,2*nx+1):
                     z = cs.vertcat(sigma_points[:,j], u_var[:,t])
                     pred = self.gaussian_process.casadi_predict(z=z)
                     # cov = self.Bd @ pred['covariance'] @ self.Bd.T
-                    mu = cs.reshape(pred['mean'], -1,1) + cs.reshape(self.prior_dynamics_func(x0=sigma_points[:,j]-self.prior_ctrl.X_LIN[:,None],
-                                                        p=cs.reshape(u_var[:, t],2,1)-self.prior_ctrl.U_LIN[:,None])['xf'], -1,1) + \
-                                cs.reshape(self.prior_ctrl.X_LIN[:,None], -1,1)
+                    mu = self.Bd @ cs.reshape(pred['mean'], 6,1) + cs.reshape(self.prior_dynamics_func(x0=cs.reshape(sigma_points[:,j]-self.prior_ctrl.X_LIN[:,None],6,1),
+                                                        p=cs.reshape(u_var[:, t],2,1)-self.prior_ctrl.U_LIN[:,None])['xf'], 6,1) + \
+                                cs.reshape(self.prior_ctrl.X_LIN[:,None], 6,1)
                     root_term = np.zeros((6,6)) #get_ut_cov_root_diagonal(cov)  #np.zeros((6,6)) #get_ut_cov_root_diagonal(cov) 
-                    temp_points, temp_weights = generate_sigma_points_gaussian( mu, root_term, cs.reshape(sigma_points[:,j], -1,1), 1.0 )
+                    temp_points, temp_weights = generate_sigma_points_gaussian( mu, root_term, np.zeros((nx,1)), 1.0 )
                     new_points = cs.hcat([ new_points, temp_points ])
                     new_weights = cs.hcat([ new_weights, temp_weights * weights[:,j]  ])  
 
