@@ -435,8 +435,8 @@ class FORESEE_GPMPC(MPC):
                                 self.prior_ctrl.X_LIN[:,None]
                     root_term = get_ut_cov_root_diagonal(cov)   #np.zeros((6,6))# get_ut_cov_root_diagonal(cov)        
                     temp_points, temp_weights = generate_sigma_points_gaussian( mu, root_term, x_var[j*nx:(j+1)*nx,t], 1.0 )                    
-                    new_points = cd.hcat([ new_points, temp_points ])
-                    new_weights = cd.hcat([ new_weights, temp_weights * weights_var[j,t]  ])
+                    new_points = cs.hcat([ new_points, temp_points ])
+                    new_weights = cs.hcat([ new_weights, temp_weights * weights_var[j,t]  ])
 
                 # Sigma Point Compress
                 compressed_sigma_points, compressed_weights = sigma_point_compress(new_points, new_weights)
@@ -480,6 +480,9 @@ class FORESEE_GPMPC(MPC):
         opti.subject_to( cs.vec(weights_var) <= 1000 )
         opti.subject_to( cs.vec(weights_var) >= -1000 )
 
+        opti.subject_to( cs.vec(u_var) <= 0.18 )
+        opti.subject_to( cs.vec(u_var) >= 0.0 )
+
         # Create solver (IPOPT solver in this version).
         opts = {"ipopt.print_level": 4,
                 "ipopt.sb": "yes",
@@ -513,6 +516,7 @@ class FORESEE_GPMPC(MPC):
              np.array: input/action to the task/env.
 
          """
+
         opti_dict = self.opti_dict
         opti = opti_dict["opti"]
         x_var = opti_dict["x_var"]
@@ -595,6 +599,14 @@ class FORESEE_GPMPC(MPC):
             _, cov = get_mean_cov( cs.reshape(x_val[:,t], self.model.nx, 2*self.model.nx+1), cs.reshape( weights_val[:,t], 1, -1 ) )
             state_covariances[t] = cov
         self.results_dict['state_horizon_cov'].append( state_covariances )
+
+        print(f" ****************************  INFO: ********************************** \n")
+        print(f"x_init:{ obs.reshape(1,-1) }, x_val: {x_val_mu[:,0]} , cov: {state_covariances[0]} ")
+        print(f"\n covs: {state_covariances}")
+        print(f"\n goal states: {goal_states}")
+
+        print(f" ****************************  INFO: ********************************** \n")
+
         zi = np.hstack((x_val[:,0], u_val[:,0]))
         zi = zi[self.input_mask]
         # gp_contribution = np.sum(self.K_z_zind_func(z1=zi, z2=z_ind_val)['K'].toarray() * mean_post_factor_val,axis=1)

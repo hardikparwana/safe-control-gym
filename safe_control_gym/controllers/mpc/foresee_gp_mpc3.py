@@ -360,7 +360,7 @@ class FORESEE_GPMPC2(MPC):
         # x_var = opti.variable(nx*(2*nx+1), T + 1)
         # weights_var = opti.variable( 2*nx+1, T+1)
         x_var_mu = opti.variable(nx, T + 1)
-        x_var_cov = opti.variable(nx, T + 1)
+        x_var_cov = opti.variable((nx*nx+nx)/2, T + 1)
         # x_var_skew = opti.variable(nx, T + 1)
         # x_var_kurt = opti.variable(nx, T + 1)
         
@@ -424,29 +424,28 @@ class FORESEE_GPMPC2(MPC):
                 # but for unstable systems, make performance much better.
 
                 # Sigma Point Expand
-                sigma_points, weights = generate_sigma_points_gaussian( cs.reshape(x_var_mu[:,t],-1,1), cs.diag( x_var_cov[:,t] ), np.zeros((nx,1)), 1.0 )
+                sigma_points, weights = generate_sigma_points_gaussian( x_var_mu[:,t], cs.diag( x_var_cov[:,t] ), np.zeros((nx,1)), 1.0 )
 
                 j = 0                
                 z = cs.vertcat(sigma_points[:,j], u_var[:,t])
                 pred = self.gaussian_process.casadi_predict(z=z)
-                # cov = self.Bd @ pred['covariance'] @ self.Bd.T
-                mu = cs.reshape(pred['mean'], -1,1) + cs.reshape(self.prior_dynamics_func(x0=sigma_points[:,j]-self.prior_ctrl.X_LIN[:,None],
-                                                        p=cs.reshape(u_var[:, t],2,1)-self.prior_ctrl.U_LIN[:,None])['xf'], -1,1) + \
-                                cs.reshape(self.prior_ctrl.X_LIN[:,None], -1,1)
+                cov = self.Bd @ pred['covariance'] @ self.Bd.T
+                mu = pred['mean'] + self.prior_dynamics_func(x0=sigma_points[:,j]-self.prior_ctrl.X_LIN[:,None],
+                                                        p=u_var[:, t]-self.prior_ctrl.U_LIN[:,None])['xf'] + \
+                                self.prior_ctrl.X_LIN[:,None]
                 root_term = np.zeros((6,6)) #get_ut_cov_root_diagonal(cov)  #np.zeros((6,6)) #get_ut_cov_root_diagonal(cov) 
-                new_points, temp_weights = generate_sigma_points_gaussian( mu, root_term, cs.reshape(sigma_points[:,j], -1,1), 1.0 )
+                new_points, temp_weights = generate_sigma_points_gaussian( mu, root_term, sigma_points[:,j], 1.0 )
                 new_weights = temp_weights * weights[:,j]                    
                 for j in range(1,2*nx+1):
                     z = cs.vertcat(sigma_points[:,j], u_var[:,t])
-                    pred = self.gaussian_process.casadi_predict(z=z)
-                    # cov = self.Bd @ pred['covariance'] @ self.Bd.T
-                    mu = cs.reshape(pred['mean'], -1,1) + cs.reshape(self.prior_dynamics_func(x0=sigma_points[:,j]-self.prior_ctrl.X_LIN[:,None],
-                                                        p=cs.reshape(u_var[:, t],2,1)-self.prior_ctrl.U_LIN[:,None])['xf'], -1,1) + \
-                                cs.reshape(self.prior_ctrl.X_LIN[:,None], -1,1)
-                    root_term = np.zeros((6,6)) #get_ut_cov_root_diagonal(cov)  #np.zeros((6,6)) #get_ut_cov_root_diagonal(cov) 
-                    temp_points, temp_weights = generate_sigma_points_gaussian( mu, root_term, cs.reshape(sigma_points[:,j], -1,1), 1.0 )
-                    new_points = cs.hcat([ new_points, temp_points ])
-                    new_weights = cs.hcat([ new_weights, temp_weights * weights[:,j]  ])  
+                pred = self.gaussian_process.casadi_predict(z=z)
+                cov = self.Bd @ pred['covariance'] @ self.Bd.T # check the 'xf' term
+                mu = pred['mean'] + self.prior_dynamics_func(x0=sigma_points[:,j]-self.prior_ctrl.X_LIN[:,None],
+                                                        p=u_var[:, t]-self.prior_ctrl.U_LIN[:,None])['xf'] + \
+                                self.prior_ctrl.X_LIN[:,None]
+                root_term = np.zeros((6,6)) #get_ut_cov_root_diagonal(cov)  #np.zeros((6,6)) #get_ut_cov_root_diagonal(cov) 
+                new_points, temp_weights = generate_sigma_points_gaussian( mu, root_term, sigma_points[:,j], 1.0 )
+                new_weights = temp_weights * weights[:,j]                
 
                 # Sigma Point Compress
                 # compressed_sigma_points, compressed_weights = sigma_point_compress(new_points, new_weights)
@@ -455,7 +454,7 @@ class FORESEE_GPMPC2(MPC):
                 # compressed_sigma_points = cs.reshape(x_var[:,t], nx, 2*nx+1)
 
             # GP Dynamics constraint as in FORESEE
-            opti.subject_to( x_var_mu[:, t+1] == compressed_mu[:,0] ) #  cs.reshape(compressed_mu, -1,1) )
+            opti.subject_to( x_var_mu[:, t+1] == compressed_mu ) #  cs.reshape(compressed_mu, -1,1) )
             opti.subject_to( x_var_cov[:, t+1] == cs.diag( compressed_cov ) )  #cs.reshape(compressed_sigma_points, -1,1) )
 
                                     
@@ -497,7 +496,7 @@ class FORESEE_GPMPC2(MPC):
         # Create solver (IPOPT solver in this version).
         opts = {"ipopt.print_level": 4,
                 "ipopt.sb": "yes",
-                "ipopt.max_iter": 1000,#100, #100,
+                "ipopt.max_iter": 500,#100, #100,
                 "print_time": 1}
         opti.solver('ipopt', opts)
         self.opti_dict = {
@@ -602,8 +601,6 @@ class FORESEE_GPMPC2(MPC):
         print(f" ****************************  INFO: ********************************** \n")
         print(f"x_init:{ obs.reshape(1,-1) }, x_val: {x_val_mu[:,0]} , cov: {x_val_cov[:,0]} ")
         print(f"\n covs: {x_val_cov}")
-        print(f"\n mus: {x_val_mu}")
-        print(f"\n inputs: {u_val}")
         print(f" ****************************  INFO: ********************************** \n")
 
         self.x_prev_mu = x_val_mu #x_val_mu

@@ -3,6 +3,9 @@
 See Figure 6 in https://arxiv.org/pdf/2108.06266.pdf.
 
 """
+
+# quad config: https://github.com/utiasDSL/safe-control-gym/blob/83fae93172782f7c6e98063da0b2425d3f741f1b/safe_control_gym/envs/gym_pybullet_drones/quadrotor.yaml#L17
+# quad model: https://github.com/utiasDSL/safe-control-gym/blob/83fae93172782f7c6e98063da0b2425d3f741f1b/safe_control_gym/envs/gym_pybullet_drones/quadrotor.py
 import os
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
@@ -77,6 +80,9 @@ def plot_2D_comparison_with_prior(state_inds,
         cov[0,1] = horizon_cov[i, state_inds[0], state_inds[1]]
         cov[1,0] = horizon_cov[i, state_inds[1], state_inds[0]]
         cov[1,1] = horizon_cov[i, state_inds[1], state_inds[1]]
+        print(f"***************** PRINT INFO ************************")
+        print(f"cov: {cov}")
+        print(f"***************** PRINT INFO ************************")
         position = horizon_states[state_inds, i]
         prior_position = prior_horizon_states[state_inds,i]
         if i == 1:
@@ -155,6 +161,8 @@ if __name__ == "__main__":
                        seed=config.seed,
                        **config.task_config
                        )
+    # print(f"env_func: {env_func}")
+    # exit()
     # Create GP controller.
     ctrl = make(config.algo,
                 env_func,
@@ -183,7 +191,7 @@ if __name__ == "__main__":
         # Run with the learned gp model.
 
         run_results = ctrl.run(env=test_env,
-                               max_steps=10)  #50)
+                               max_steps=20)  #50)
         ctrl.close()
         # Plot the results.
         prior_run = munch.munchify(prior_results)

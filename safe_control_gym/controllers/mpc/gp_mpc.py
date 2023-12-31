@@ -34,6 +34,7 @@ from safe_control_gym.controllers.mpc.mpc_utils import discretize_linear_system
 from safe_control_gym.controllers.mpc.gp_utils import GaussianProcessCollection, ZeroMeanIndependentGPModel, covSEard
 from safe_control_gym.envs.benchmark_env import Task
 
+import pdb
 
 class GPMPC(MPC):
     """MPC with Gaussian Process as dynamics residual. 
@@ -481,6 +482,13 @@ class GPMPC(MPC):
             x_val, u_val = sol.value(x_var), sol.value(u_var)
         except RuntimeError:
             x_val, u_val = opti.debug.value(x_var), opti.debug.value(u_var)
+
+        print(f" ****************************  INFO: ********************************** \n")
+        print(f"x_init:{ obs.reshape(1,-1) }, x_val: {x_val[:,0]} ")
+        print(f"\n goal states: {goal_states}")
+        
+        print(f" ****************************  INFO: ********************************** \n")
+
         u_val = np.atleast_2d(u_val)
         self.x_prev = x_val
         self.u_prev = u_val
@@ -505,6 +513,7 @@ class GPMPC(MPC):
         else:
             action = np.array([u_val[0]])
         self.prev_action = action,
+        pdb.set_trace()
         return action
 
     def learn(self,
