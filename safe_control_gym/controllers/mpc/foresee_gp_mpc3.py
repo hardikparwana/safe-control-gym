@@ -39,7 +39,7 @@ from safe_control_gym.controllers.mpc.foresee_utils import *
 import pdb
 
 
-class FORESEE_GPMPC2(MPC):
+class FORESEE_GPMPC3(MPC):
     """MPC with Gaussian Process as dynamics residual and FORESEE for uncertainty propagation. 
 
     """
@@ -151,6 +151,9 @@ class FORESEE_GPMPC2(MPC):
             self.target_mask = target_mask
         Bd = np.eye(self.model.nx)
         self.Bd = Bd[:, self.target_mask]
+
+        # print(f"Bd: {self.Bd}")
+        # exit()
         self.gp_approx = gp_approx
         self.online_learning = online_learning
         self.last_obs = None
@@ -238,82 +241,82 @@ class FORESEE_GPMPC2(MPC):
         inputs = np.hstack([x_seq, u_seq])  # (N, nx+nu).
         return inputs, targets
 
-    # def precompute_probabilistic_limits(self,
-    #                                     print_sets=True
-    #                                     ):
-    #     """This updates the constraint value limits to account for the uncertainty in the dynamics rollout.
+    def precompute_probabilistic_limits(self,
+                                        print_sets=True
+                                        ):
+        """This updates the constraint value limits to account for the uncertainty in the dynamics rollout.
 
-    #     Args:
-    #         print_sets (bool): True to print out the sets for debugging purposes.
+        Args:
+            print_sets (bool): True to print out the sets for debugging purposes.
 
-    #     """
-    #     nx, nu = self.model.nx, self.model.nu
-    #     T = self.T
-    #     state_covariances = np.zeros((self.T+1, nx, nx))
-    #     input_covariances = np.zeros((self.T, nu, nu))
+        """
+        nx, nu = self.model.nx, self.model.nu
+        T = self.T
+        state_covariances = np.zeros((self.T+1, nx, nx))
+        input_covariances = np.zeros((self.T, nu, nu))
 
-    #     # Initilize lists for the tightening of each constraint.
-    #     state_constraint_set = []
-    #     for state_constraint in self.constraints.state_constraints:
-    #         state_constraint_set.append(np.zeros((state_constraint.num_constraints, T+1)))
+        # Initilize lists for the tightening of each constraint.
+        state_constraint_set = []
+        for state_constraint in self.constraints.state_constraints:
+            state_constraint_set.append(np.zeros((state_constraint.num_constraints, T+1)))
 
-    #     input_constraint_set = []
-    #     for input_constraint in self.constraints.input_constraints:
-    #         input_constraint_set.append(np.zeros((input_constraint.num_constraints, T)))
+        input_constraint_set = []
+        for input_constraint in self.constraints.input_constraints:
+            input_constraint_set.append(np.zeros((input_constraint.num_constraints, T)))
 
-    #     if self.x_prev is not None and self.u_prev is not None and self.weights_prev is not None:
-    #         cov_x = np.diag([self.initial_rollout_std**2]*nx)
-    #         for i in range(T):
-    #             state_covariances[i] = cov_x
-    #             cov_u = self.lqr_gain @ cov_x @ self.lqr_gain.T
-    #             input_covariances[i] = cov_u
-    #             cov_xu = cov_x @ self.lqr_gain.T
-    #             z = np.hstack((self.x_prev[:,i], self.u_prev[:,i]))
+        if self.x_prev is not None and self.u_prev is not None and self.weights_prev is not None:
+            cov_x = np.diag([self.initial_rollout_std**2]*nx)
+            for i in range(T):
+                state_covariances[i] = cov_x
+                cov_u = self.lqr_gain @ cov_x @ self.lqr_gain.T
+                input_covariances[i] = cov_u
+                cov_xu = cov_x @ self.lqr_gain.T
+                z = np.hstack((self.x_prev[:,i], self.u_prev[:,i]))
 
-    #             if self.gp_approx == 'taylor':
-    #                 raise NotImplementedError("Taylor GP approximation is currently not working.")
-    #             elif self.gp_approx == 'mean_eq':
-    #                 _, cov_d_tensor = self.gaussian_process.predict(z[None,:], return_pred=False)
-    #                 cov_d = cov_d_tensor.detach().numpy()
-    #             else:
-    #                 raise NotImplementedError('gp_approx method is incorrect or not implemented')
+                if self.gp_approx == 'taylor':
+                    raise NotImplementedError("Taylor GP approximation is currently not working.")
+                elif self.gp_approx == 'mean_eq':
+                    _, cov_d_tensor = self.gaussian_process.predict(z[None,:], return_pred=False)
+                    cov_d = cov_d_tensor.detach().numpy()
+                else:
+                    raise NotImplementedError('gp_approx method is incorrect or not implemented')
                 
-    #             # Loop through input constraints and tighten by the required ammount.
-    #             for ui, input_constraint in enumerate(self.constraints.input_constraints):
-    #                 input_constraint_set[ui][:, i] = -1*self.inverse_cdf * \
-    #                                                 np.absolute(input_constraint.A) @ np.sqrt(np.diag(cov_u))
+                # Loop through input constraints and tighten by the required ammount.
+                for ui, input_constraint in enumerate(self.constraints.input_constraints):
+                    input_constraint_set[ui][:, i] = -1*self.inverse_cdf * \
+                                                    np.absolute(input_constraint.A) @ np.sqrt(np.diag(cov_u))
                     
-    #             for si, state_constraint in enumerate(self.constraints.state_constraints):
-    #                 state_constraint_set[si][:, i] = -1*self.inverse_cdf * \
-    #                                                 np.absolute(state_constraint.A) @ np.sqrt(np.diag(cov_x))
+                for si, state_constraint in enumerate(self.constraints.state_constraints):
+                    state_constraint_set[si][:, i] = -1*self.inverse_cdf * \
+                                                    np.absolute(state_constraint.A) @ np.sqrt(np.diag(cov_x))
                     
-    #             if self.gp_approx == 'taylor':
-    #                 raise NotImplementedError("Taylor GP rollout not implemented.")
-    #             elif self.gp_approx == 'mean_eq':
-    #                 # Compute the next step propogated state covariance using mean equivilence.
-    #                 cov_x = self.discrete_dfdx @ cov_x @ self.discrete_dfdx.T + \
-    #                         self.discrete_dfdx @ cov_xu @ self.discrete_dfdu.T + \
-    #                         self.discrete_dfdu @ cov_xu.T @ self.discrete_dfdx.T + \
-    #                         self.discrete_dfdu @ cov_u @ self.discrete_dfdu.T + \
-    #                         self.Bd @ cov_d @ self.Bd.T
-    #             else:
-    #                 raise NotImplementedError('gp_approx method is incorrect or not implemented')
+                if self.gp_approx == 'taylor':
+                    raise NotImplementedError("Taylor GP rollout not implemented.")
+                elif self.gp_approx == 'mean_eq':
+                    # Compute the next step propogated state covariance using mean equivilence.
+                    cov_x = self.discrete_dfdx @ cov_x @ self.discrete_dfdx.T + \
+                            self.discrete_dfdx @ cov_xu @ self.discrete_dfdu.T + \
+                            self.discrete_dfdu @ cov_xu.T @ self.discrete_dfdx.T + \
+                            self.discrete_dfdu @ cov_u @ self.discrete_dfdu.T + \
+                            self.Bd @ cov_d @ self.Bd.T
+                else:
+                    raise NotImplementedError('gp_approx method is incorrect or not implemented')
                 
-    #         # Udate Final covariance.
-    #         for si, state_constraint in enumerate(self.constraints.state_constraints):
-    #             state_constraint_set[si][:,-1] = -1 * self.inverse_cdf * \
-    #                                             np.absolute(state_constraint.A) @ np.sqrt(np.diag(cov_x))
-    #         state_covariances[-1] = cov_x
-    #     if print_sets:
-    #         print("Probabilistic State Constraint values along Horizon:")
-    #         print(state_constraint_set)
-    #         print("Probabilistic Input Constraint values along Horizon:")
-    #         print(input_constraint_set)
-    #     self.results_dict['input_constraint_set'].append(input_constraint_set)
-    #     self.results_dict['state_constraint_set'].append(state_constraint_set)
-    #     self.results_dict['state_horizon_cov'].append(state_covariances)
-    #     self.results_dict['input_horizon_cov'].append(input_covariances)
-    #     return state_constraint_set, input_constraint_set
+            # Udate Final covariance.
+            for si, state_constraint in enumerate(self.constraints.state_constraints):
+                state_constraint_set[si][:,-1] = -1 * self.inverse_cdf * \
+                                                np.absolute(state_constraint.A) @ np.sqrt(np.diag(cov_x))
+            state_covariances[-1] = cov_x
+        if print_sets:
+            print("Probabilistic State Constraint values along Horizon:")
+            print(state_constraint_set)
+            print("Probabilistic Input Constraint values along Horizon:")
+            print(input_constraint_set)
+        self.results_dict['input_constraint_set'].append(input_constraint_set)
+        self.results_dict['state_constraint_set'].append(state_constraint_set)
+        self.results_dict['state_horizon_cov'].append(state_covariances)
+        self.results_dict['input_horizon_cov'].append(input_covariances)
+        return state_constraint_set, input_constraint_set
 
     # def precompute_sparse_gp_values(self):
     #     """Uses the last MPC solution to precomupte values associated with the FITC GP approximation.
@@ -348,6 +351,35 @@ class FORESEE_GPMPC2(MPC):
     #                               torch.from_numpy(targets[:,self.target_mask[i]]).double()
     #     return mean_post_factor.detach().numpy(), Sigma.detach().numpy(), K_zind_zind_inv.detach().numpy(), z_ind
 
+    def construct_cov(self, cov):
+        COV = cd.diag( cov[0:self.model.nx, 0] )
+        index = self.model.nx
+        for i in range(self.model.nx-1):
+            for j in range( i+1, self.model.nx ):
+                COV[i, j] = cov[ index, 0 ]
+                COV[j, i] = cov[ index, 0 ]
+                index = index + 1
+        return COV
+    
+    def construct_cov_numpy(self, cov):
+        COV = np.diag( cov[0:self.model.nx, 0] )
+        index = self.model.nx
+        for i in range(self.model.nx-1):
+            for j in range( i+1, self.model.nx ):
+                COV[i, j] = cov[ index, 0 ]
+                COV[j, i] = cov[ index, 0 ]
+                index = index + 1
+        return COV
+    
+    def vectorize_cov(self, COV):
+        cov = cd.reshape(cd.diag(COV), -1, 1)
+        for i in range(self.model.nx-1):
+            for j in range( i+1, self.model.nx ):
+                cov = cd.vcat(
+                    [ cov, COV[i,j] ]
+                )
+        return cov
+
     def setup_gp_optimizer(self):
         """Sets up nonlinear optimization problem including cost objective, variable bounds and dynamics constraints.
 
@@ -360,7 +392,7 @@ class FORESEE_GPMPC2(MPC):
         # x_var = opti.variable(nx*(2*nx+1), T + 1)
         # weights_var = opti.variable( 2*nx+1, T+1)
         x_var_mu = opti.variable(nx, T + 1)
-        x_var_cov = opti.variable((nx*nx+nx)/2, T + 1)
+        x_var_cov = opti.variable(int((nx*nx+nx)/2), T + 1)
         # x_var_skew = opti.variable(nx, T + 1)
         # x_var_kurt = opti.variable(nx, T + 1)
         
@@ -370,7 +402,7 @@ class FORESEE_GPMPC2(MPC):
         # x_init = opti.parameter(nx*(2*nx+1), 1)
         # weights_init = opti.parameter( 2*nx+1, 1)
         x_init_mu = opti.parameter(nx, 1)
-        x_init_cov = opti.parameter(nx, 1)
+        x_init_cov = opti.parameter(int((nx*nx+nx)/2), 1)
         # x_init_skew = opti.variable(nx, T + 1)
         # x_init_kurt = opti.variable(nx, T + 1)
         # Reference (equilibrium point or trajectory, last step for terminal cost).
@@ -423,29 +455,31 @@ class FORESEE_GPMPC2(MPC):
                 # Sparse GP approximation doesn't always work well, thus, use Exact GP regression. This is much slower,
                 # but for unstable systems, make performance much better.
 
-                # Sigma Point Expand
-                sigma_points, weights = generate_sigma_points_gaussian( x_var_mu[:,t], cs.diag( x_var_cov[:,t] ), np.zeros((nx,1)), 1.0 )
+                # Sigma Point Expand  
+                sigma_points, weights = generate_sigma_points_gaussian( cs.reshape(x_var_mu[:,t],-1,1), self.construct_cov( x_var_cov[:,t] ), np.zeros((nx,1)), 1.0 )
 
                 j = 0                
                 z = cs.vertcat(sigma_points[:,j], u_var[:,t])
                 pred = self.gaussian_process.casadi_predict(z=z)
                 cov = self.Bd @ pred['covariance'] @ self.Bd.T
-                mu = pred['mean'] + self.prior_dynamics_func(x0=sigma_points[:,j]-self.prior_ctrl.X_LIN[:,None],
-                                                        p=u_var[:, t]-self.prior_ctrl.U_LIN[:,None])['xf'] + \
-                                self.prior_ctrl.X_LIN[:,None]
-                root_term = np.zeros((6,6)) #get_ut_cov_root_diagonal(cov)  #np.zeros((6,6)) #get_ut_cov_root_diagonal(cov) 
-                new_points, temp_weights = generate_sigma_points_gaussian( mu, root_term, sigma_points[:,j], 1.0 )
+                mu = self.Bd @ cs.reshape(pred['mean'], 6,1) + cs.reshape(self.prior_dynamics_func(x0=cs.reshape(sigma_points[:,j]-self.prior_ctrl.X_LIN[:,None],6,1),
+                                                        p=cs.reshape(u_var[:, t],2,1)-self.prior_ctrl.U_LIN[:,None])['xf'], 6,1) + \
+                                cs.reshape(self.prior_ctrl.X_LIN[:,None], 6,1)
+                root_term = get_ut_cov_root_diagonal(cov)  #np.zeros((6,6)) #get_ut_cov_root_diagonal(cov) 
+                # new_points, temp_weights = generate_sigma_points_gaussian( mu, root_term, cs.reshape(sigma_points[:,j], -1,1), 1.0 )
+                new_points, temp_weights = generate_sigma_points_gaussian( mu, root_term, np.zeros((nx,1)), 1.0 )
                 new_weights = temp_weights * weights[:,j]                    
                 for j in range(1,2*nx+1):
                     z = cs.vertcat(sigma_points[:,j], u_var[:,t])
-                pred = self.gaussian_process.casadi_predict(z=z)
-                cov = self.Bd @ pred['covariance'] @ self.Bd.T # check the 'xf' term
-                mu = pred['mean'] + self.prior_dynamics_func(x0=sigma_points[:,j]-self.prior_ctrl.X_LIN[:,None],
-                                                        p=u_var[:, t]-self.prior_ctrl.U_LIN[:,None])['xf'] + \
-                                self.prior_ctrl.X_LIN[:,None]
-                root_term = np.zeros((6,6)) #get_ut_cov_root_diagonal(cov)  #np.zeros((6,6)) #get_ut_cov_root_diagonal(cov) 
-                new_points, temp_weights = generate_sigma_points_gaussian( mu, root_term, sigma_points[:,j], 1.0 )
-                new_weights = temp_weights * weights[:,j]                
+                    pred = self.gaussian_process.casadi_predict(z=z)
+                    cov = self.Bd @ pred['covariance'] @ self.Bd.T
+                    mu = self.Bd @ cs.reshape(pred['mean'], 6,1) + cs.reshape(self.prior_dynamics_func(x0=cs.reshape(sigma_points[:,j]-self.prior_ctrl.X_LIN[:,None],6,1),
+                                                        p=cs.reshape(u_var[:, t],2,1)-self.prior_ctrl.U_LIN[:,None])['xf'], 6,1) + \
+                                cs.reshape(self.prior_ctrl.X_LIN[:,None], 6,1)
+                    root_term = get_ut_cov_root_diagonal(cov)  #np.zeros((6,6)) #get_ut_cov_root_diagonal(cov) 
+                    temp_points, temp_weights = generate_sigma_points_gaussian( mu, root_term, np.zeros((nx,1)), 1.0 )
+                    new_points = cs.hcat([ new_points, temp_points ])
+                    new_weights = cs.hcat([ new_weights, temp_weights * weights[:,j]  ])  
 
                 # Sigma Point Compress
                 # compressed_sigma_points, compressed_weights = sigma_point_compress(new_points, new_weights)
@@ -454,9 +488,8 @@ class FORESEE_GPMPC2(MPC):
                 # compressed_sigma_points = cs.reshape(x_var[:,t], nx, 2*nx+1)
 
             # GP Dynamics constraint as in FORESEE
-            opti.subject_to( x_var_mu[:, t+1] == compressed_mu ) #  cs.reshape(compressed_mu, -1,1) )
-            opti.subject_to( x_var_cov[:, t+1] == cs.diag( compressed_cov ) )  #cs.reshape(compressed_sigma_points, -1,1) )
-
+            opti.subject_to( x_var_mu[:, t+1] == compressed_mu[:,0] ) #  cs.reshape(compressed_mu, -1,1) )
+            opti.subject_to( x_var_cov[:, t+1] == self.vectorize_cov( compressed_cov ) )  #cs.reshape(compressed_sigma_points, -1,1) )
                                     
             # # z = z[self.input_mask,:]
             # next_state = self.prior_dynamics_func(x0=x_var[:, i]-self.prior_ctrl.X_LIN[:,None],
@@ -487,11 +520,16 @@ class FORESEE_GPMPC2(MPC):
         opti.subject_to(x_var_cov[:, 0] == x_init_cov)
 
         # Bound on the value of weights
-        opti.subject_to( cs.vec(x_var_cov) >= 0 )
+        opti.subject_to( cs.vec(x_var_cov[0:nx,:]) >= 0 )
         # opti.subject_to( cs.vec(weights_var) >= -1000 )
 
-        opti.subject_to( cs.vec(u_var) <= 0.18 )
+        # Input constraints
+        opti.subject_to( cs.vec(u_var) <= 0.2 )
         opti.subject_to( cs.vec(u_var) >= 0.0 )
+
+        # add state constraints
+        for state_constraint in self.constraints.state_constraints:
+            opti.subject_to( cd.vec(state_constraint.A @ x_var_mu - cs.reshape(state_constraint.b, state_constraint.b.size, 1)) <= 0 )
 
         # Create solver (IPOPT solver in this version).
         opts = {"ipopt.print_level": 4,
@@ -551,7 +589,7 @@ class FORESEE_GPMPC2(MPC):
         # opti.set_value( weights_init, cs.reshape(sigma_weights_init, -1,1) )
 
         opti.set_value( x_init_mu, obs.reshape(-1,1) )
-        opti.set_value( x_init_cov, np.zeros((self.model.nx, 1)) )
+        opti.set_value( x_init_cov, np.zeros((int((self.model.nx*self.model.nx+self.model.nx)/2), 1)) )
 
         # opti.set_value( x_init, np.tile(obs.reshape(-1,1), (2*self.model.nx+1, 1)) )
         # opti.set_value( weights_init, np.ones((2*self.model.nx+1,1)) )
@@ -601,6 +639,8 @@ class FORESEE_GPMPC2(MPC):
         print(f" ****************************  INFO: ********************************** \n")
         print(f"x_init:{ obs.reshape(1,-1) }, x_val: {x_val_mu[:,0]} , cov: {x_val_cov[:,0]} ")
         print(f"\n covs: {x_val_cov}")
+        print(f"\n mus: {x_val_mu}")
+        print(f"\n inputs: {u_val}")
         print(f" ****************************  INFO: ********************************** \n")
 
         self.x_prev_mu = x_val_mu #x_val_mu
@@ -611,7 +651,7 @@ class FORESEE_GPMPC2(MPC):
         self.results_dict['horizon_inputs'].append(deepcopy(self.u_prev))
         state_covariances = np.zeros((self.T+1, self.model.nx, self.model.nx))
         for t in range(self.T+1):
-            state_covariances[t] = np.diag( x_val_cov[:,t] )
+            state_covariances[t] =  self.construct_cov_numpy(x_val_cov[:,t].reshape(-1,1)) #np.diag( x_val_cov[:,t] )
         self.results_dict['state_horizon_cov'].append( state_covariances )
         zi = np.hstack((x_val_mu[:,0], u_val[:,0]))
         zi = zi[self.input_mask]

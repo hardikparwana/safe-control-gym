@@ -35,6 +35,10 @@ register(id="foresee_gp_mpc2",
          entry_point="safe_control_gym.controllers.mpc.foresee_gp_mpc2:FORESEE_GPMPC2",
          config_entry_point="safe_control_gym.controllers.mpc:gp_mpc.yaml")
 
+register(id="foresee_gp_mpc3",
+         entry_point="safe_control_gym.controllers.mpc.foresee_gp_mpc3:FORESEE_GPMPC3",
+         config_entry_point="safe_control_gym.controllers.mpc:gp_mpc.yaml")
+
 register(id="mpsc",
          entry_point="safe_control_gym.controllers.mpsc.mpsc:MPSC",
          config_entry_point="safe_control_gym.controllers.mpsc:mpsc.yaml")

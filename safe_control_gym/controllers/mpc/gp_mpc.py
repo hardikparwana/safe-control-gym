@@ -404,6 +404,8 @@ class GPMPC(MPC):
                 opti.subject_to(state_constraint(x_var[:, i]) <= state_constraint_set[s_i][:,i])
             for u_i, input_constraint in enumerate(self.input_constraints_sym):
                 opti.subject_to(input_constraint(u_var[:, i]) <= input_constraint_set[u_i][:,i])
+
+        pdb.set_trace()
         # Final state constraints.
         for s_i, state_constraint in enumerate(self.state_constraints_sym):
             opti.subject_to(state_constraint(x_var[:, -1]) <= state_constraint_set[s_i][:,-1])
