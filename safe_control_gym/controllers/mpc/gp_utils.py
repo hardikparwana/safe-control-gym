@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 import casadi as ca
 from copy import deepcopy
 from sklearn import preprocessing
+import jax.numpy as jnp
+from jax import jit, lax
 
 from safe_control_gym.utils.utils import mkdirs
 
@@ -34,6 +36,28 @@ def covSEard(x,
     """
     dist = ca.sum1((x - z)**2 / ell**2)
     return sf2 * ca.SX.exp(-.5 * dist)
+
+def covSEard_jax(x,
+             z,
+             ell,
+             sf2
+             ):
+    """GP squared exponential kernel.
+
+    This function is based on the 2018 GP-MPC library by Helge-André Langåker
+
+    Args:
+        x (np.array or casadi.MX/SX): First vector.
+        z (np.array or casadi.MX/SX): Second vector.
+        ell (np.array or casadi.MX/SX): Length scales.
+        sf2 (float or casadi.MX/SX): output scale parameter.
+
+    Returns:
+        SE kernel (casadi.MX/SX): SE kernel.
+
+    """
+    dist = jnp.sum( (x - z)**2 / ell**2, axis=0 )
+    return sf2 * jnp.exp(-.5 * dist)
 
 
 class ZeroMeanIndependentMultitaskGPModel(gpytorch.models.ExactGP):
@@ -127,7 +151,7 @@ class GaussianProcessCollection:
     """Collection of GaussianProcesses for multioutput GPs.
 
     """
-
+    jax_predict = []
     def __init__(self, model_type,
                  likelihood,
                  target_dim,
@@ -208,6 +232,7 @@ class GaussianProcessCollection:
         self.K_plus_noise = gp_K_plus_noise
         self.K_plus_noise_inv = gp_K_plus_noise_inv
         self.casadi_predict = self.make_casadi_predict_func()
+        self.jax_predict = self.make_jax_predict_func()
 
     def get_hyperparameters(self,
                             as_numpy=False
@@ -272,6 +297,7 @@ class GaussianProcessCollection:
         gp_K_plus_noise = torch.stack(gp_K_plus_noise_list)
         self.K_plus_noise = gp_K_plus_noise
         self.casadi_predict = self.make_casadi_predict_func()
+        self.jax_predict = self.make_jax_predict_func()
 
 
     def predict(self,
@@ -330,6 +356,23 @@ class GaussianProcessCollection:
                                      ['z'],
                                      ['mean', 'covariance'])
         return casadi_predict
+    
+    def make_jax_predict_func(self):
+        """
+        Assume train_inputs and train_tergets are already
+        """
+        @jit
+        def body(z):
+            means = jnp.zeros((4,1))
+            covs = jnp.zeros((4,4))
+
+            for gp_ind, gp in enumerate(self.gp_list):            
+                pred_mu, pred_cov = gp.jax_predict(z=z)
+                means = means.at[gp_ind,0].set(pred_mu[0,0])
+                covs = covs.at[gp_ind,gp_ind].set(pred_cov[0,0])
+            return means, covs
+
+        return body
 
 
 
@@ -428,6 +471,7 @@ class GaussianProcess:
     """Gaussian Process decorator for gpytorch.
 
     """
+    jax_predict = []
 
     def __init__(self,
                   model_type,
@@ -513,6 +557,7 @@ class GaussianProcess:
         self.model.double() # needed otherwise loads state_dict as float32
         self._compute_GP_covariances(train_inputs)
         self.casadi_predict = self.make_casadi_prediction_func(train_inputs, train_targets)
+        self.jax_predict = self.make_jax_prediction_func(train_inputs, train_targets)
 
     def train(self,
               train_input_data,
@@ -600,6 +645,7 @@ class GaussianProcess:
         self.model.load_state_dict(torch.load(fname))
         self._compute_GP_covariances(train_x)
         self.casadi_predict = self.make_casadi_prediction_func(train_x, train_y)
+        self.jax_predict = self.make_jax_prediction_func(train_x, train_y)
 
     def predict(self,
                 x,
@@ -677,6 +723,25 @@ class GaussianProcess:
                               ['z'],
                               ['mean', 'covariance'])
         return predict
+    
+    def make_jax_prediction_func(self, train_inputs, train_targets):
+        """
+        Assumes train_inputs and train_targets are already masked.
+        """
+        train_inputs = train_inputs.numpy()
+        train_targets = train_targets.numpy()
+        lengthscale = self.model.covar_module.base_kernel.lengthscale.detach().numpy()
+        output_scale = self.model.covar_module.outputscale.detach().numpy()
+        K_plus_noise_inv = self.model.K_plus_noise_inv.detach().numpy()
+
+        @jit
+        def body(z):
+            K_z_ztrain = covSEard_jax( z, train_inputs.T, lengthscale.T, output_scale )
+            K_z_z = covSEard_jax( z, z, train_inputs.T, lengthscale.T, output_scale )
+            predict_mean = K_z_ztrain @ K_plus_noise_inv @ train_targets
+            predict_covariance = K_z_z - K_z_ztrain @ K_plus_noise_inv @ K_z_ztrain
+            return predict_mean, predict_covariance
+        return body
 
     def plot_trained_gp(self,
                         inputs,

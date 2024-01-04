@@ -8,9 +8,9 @@ def step(x,u,dt):
     return x+u*dt
 
 
-def dynamics_step( base_term, state_dot, dt ):
-    next_state = base_term + state_dot * dt
-    return next_state
+# def dynamics_step( base_term, state_dot, dt ):
+#     next_state = base_term + state_dot * dt
+#     return next_state
 
 # assume a single control input
 # assume this is true dynamics

@@ -42,7 +42,7 @@ from safe_control_gym.controllers.mpc.foresee_utils import *
 import pdb
 
 
-class FORESEE_GPMPC2(MPC):
+class FORESEE_CBF_QP(MPC):
     """MPC with Gaussian Process as dynamics residual and FORESEE for uncertainty propagation. 
 
     """
@@ -375,11 +375,75 @@ class FORESEE_GPMPC2(MPC):
     #                               torch.from_numpy(targets[:,self.target_mask[i]]).double()
     #     return mean_post_factor.detach().numpy(), Sigma.detach().numpy(), K_zind_zind_inv.detach().numpy(), z_ind
 
+    @staticmethod
+    def controller(params, X, x_goal, A, b):
+
+            p = jnp.array([ X[0,0], X[2,0] ]).reshape(-1,1)
+            pdot = jnp.array([ X[1,0], X[3,0] ]).reshape(-1,1)
+
+            kx = params[0]
+            kv = params[1]
+            kRx = params[2]
+            kRv = params[3]
+            kT1x = params[4]
+            kT1y = params[5]
+            kT10 = params[6]
+            kT2x = params[7]
+            kT2y = params[8]
+            kT20 = params[9]
+            
+            # attraction
+            # print(f"p: {p}, goal: {x_goal}")
+            vd = kx * (p - jnp.array([x_goal[0,0], x_goal[2,0]]).reshape(-1,1) )
+            ad_attraction = kv * (pdot - vd)
+            
+            # Repulsion
+            # print(f"A: {A}, b:{b}")
+            vd_repulsion = kRx * jnp.array([A[0,0], A[0,2]]).reshape(-1,1)  * 1.0 / ( b.reshape(-1,1) - A @ X )
+            ad_repulsion = jnp.zeros((2,1)) #kRv * ( pdot - vd_repulsion )
+
+            # toal acceleration
+            ad = ad_attraction + ad_repulsion
+
+            T1 = kT1x * ad[0,0] + kT1y * ad[1,0] + kT10
+            T2 = kT2x * ad[0,0] + kT2y * ad[1,0] + kT20
+
+            action = jnp.array([T1, T2]) #.reshape(-1,1) 
+
+            action = action / jnp.max( jnp.array([jnp.linalg.norm(action), 0.01]) ) * 2.0
+
+            print(f"action: {action}, a: {ad}, att: {ad_attraction}, rep: {ad_repulsion}")
+
+            # pdb.set_trace()
+            action = jnp.array([0.3, 1.0])
+            return action
+    
+    # def dynamics_step(X, u, A, B, x_eq, u_eq):
+
+    #     x_next = A @ (X - x_eq) + B @ (u - u_eq) +\
+    #         x_eq + gp_jax.predict()
+
+
+
+    
+    @staticmethod
+    def predict(X, T, A, B, x_eq, u_eq):
+
+            states = jnp.zeros((6, T))
+            states = states.at[:,0].set( X[:,0] )
+            def body(i, inputs):
+                states = inputs
+                u = FORESEE_CBF_QP.controller(states[:,i])
+                states = states.at[:,i+1].set( dynamics_step(states[:,i], u, A, B, x_eq, u_eq) )
+                return states            
+            return body(states)
+
+
     def setup_gp_optimizer(self):
         """Sets up nonlinear optimization problem including cost objective, variable bounds and dynamics constraints.
 
         """
-
+        return
 
         # Here do my jax thing. leave casadi
 
@@ -394,46 +458,7 @@ class FORESEE_GPMPC2(MPC):
         # just use GP jax?? better option at this point maybe
 
 
-        def controller(params, X, x_goal):
-
-            p = jnp.array([ X[0,0], X[2,0] ])
-            pdot = jnp.array([ X[1,0], X[3,0] ])
-
-            kx = params[0]
-            kv = params[1]
-            
-
-            # attraction
-            vd = kx * (p - x_goal)
-            ad_attraction = kv * (pdot - vd)
-
-            # Repulsion
-            ad_repulsion = 
-
-            T1 = kT1x * ad[0] + kT1y * ad[1] + kT10
-            T2 = kT1x * ad[0] + kT2y * ad[1] + kT20
-
-            retrun jnp.array([T1, T2]).reshape(-1,1)
-
-
-
-            thrust_d = 
-
-
-
-            ad = kv * (X[]  )
-
-
-        def predict(X, T):
-
-            states = jnp.zeros((nx, T))
-            states = states.at[:,0].set( X[:,0] )
-            def body(i, inputs):
-                states = inputs
-                u = controller(states[:,i])
-                states = states.at[:,i+1].set( step(states[:,i], u) )
-                return states            
-            return body(states)
+        
 
 
 
@@ -612,8 +637,24 @@ class FORESEE_GPMPC2(MPC):
              np.array: input/action to the task/env.
 
          """
+        z = jnp.append( obs.reshape(-1,1), jnp.zeros((2,1)), axis=0 )
+        self.gaussian_process.jax_predict(z=z)
         
-                
+        kx = 1.0
+        kv = 1.0
+        kRx = 1.0
+        kRv = 1.0
+        kT1x = -1.0
+        kT1y = 1.0
+        kT10 = 1.0
+        kT2x = 1.0
+        kT2y = 1.0
+        kT20 = 1.0
+        params = [ kx, kv, kRx, kRv, kT1x, kT1y, kT10, kT2x, kT2y, kT20 ]
+
+        action = FORESEE_CBF_QP.controller(params, obs.reshape(-1,1), self.env.X_GOAL.reshape(-1,1), self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
+
+        return action         
         # action = np.array([0.3, 0.4])
         # pdb.set_trace()
         # return action

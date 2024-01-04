@@ -53,9 +53,9 @@ def plot_2D_comparison_with_prior(state_inds,
     """
 
     """
-    horizon_cov = run.state_horizon_cov[init_ind]
-    horizon_states = run.horizon_states[init_ind]
-    prior_horizon_states = prior_run.horizon_states[init_ind]
+    # horizon_cov = run.state_horizon_cov[init_ind]
+    # horizon_states = run.horizon_states[init_ind]
+    # prior_horizon_states = prior_run.horizon_states[init_ind]
     fig, ax = plt.subplots()
     ax.plot(goal[0], goal[1], 'g',
             marker='x',
@@ -65,49 +65,49 @@ def plot_2D_comparison_with_prior(state_inds,
     final_ind = -1
     ax.plot(prior_run.obs[:,state_inds[0]], prior_run.obs[:,state_inds[1]], '-', label='Linear MPC')
     ax.plot(run.obs[:, state_inds[0]], run.obs[:, state_inds[1]], '-', label='GP-MPC')
-    if dir is not None:
-        np.savetxt(os.path.join(dir, 'goal.csv'), np.array([goal]),  delimiter=',',header='x_goal,y_goal')
-        np.savetxt(os.path.join(dir,'linear_mpc.csv'), prior_run.obs[:,state_inds],  delimiter=',',header='x_linearmpc,y_linearmpc')
-        np.savetxt(os.path.join(dir,'gp_mpc.csv'), run.obs[:,state_inds],  delimiter=',',header='x_gpmpc,y_gpmpc')
-        np.savetxt(os.path.join(dir,'gp_mpc_horizon.csv'), horizon_states[state_inds].T, delimiter=',',
-                   header='x_gpmpc-horizon,y_gpmpc-horizon')
-        np.savetxt(os.path.join(dir, 'linear_mpc_horizon.csv'), prior_horizon_states[state_inds].T, delimiter=',',
-                   header='x_linear-horizon,y_linear-horizon')
-        run_ellipse_data = np.zeros((horizon_cov.shape[0], 2+1+1+1))
-    for i in range(horizon_cov.shape[0]): # time horizon
-        cov = np.zeros((2, 2))
-        cov[0,0] = horizon_cov[i, state_inds[0], state_inds[0]]
-        cov[0,1] = horizon_cov[i, state_inds[0], state_inds[1]]
-        cov[1,0] = horizon_cov[i, state_inds[1], state_inds[0]]
-        cov[1,1] = horizon_cov[i, state_inds[1], state_inds[1]]
-        print(f"***************** PRINT INFO ************************")
-        print(f"cov: {cov}")
-        print(f"***************** PRINT INFO ************************")
-        position = horizon_states[state_inds, i]
-        prior_position = prior_horizon_states[state_inds,i]
-        if i == 1:
-            ax.plot(position[0], position[1], 'k.', label='GP-MPC Prediction horizon')
-            ax.plot(prior_position[0], prior_position[1], 'm.', label='Linear MPC Prediction horizon')
-            pos, major_axis_length, minor_axis_length, alpha = add_2d_cov_ellipse(position, cov, ax, legend=True)
-            if dir is not None:
-                run_ellipse_data[i,:2] = pos
-                run_ellipse_data[i,2] = major_axis_length
-                run_ellipse_data[i,3] = minor_axis_length
-                run_ellipse_data[i,4] = alpha
-        else:
-            ax.plot(position[0], position[1], 'k.')
-            ax.plot(prior_position[0], prior_position[1], 'm.')
-            pos, major_axis_length, minor_axis_length, alpha = add_2d_cov_ellipse(position, cov, ax)
-            if dir is not None:
-                run_ellipse_data[i, :2] = pos
-                run_ellipse_data[i, 2] = major_axis_length
-                run_ellipse_data[i, 3] = minor_axis_length
-                run_ellipse_data[i, 4] = alpha
-        ax.annotate(str(i), position)
-        ax.annotate(str(i), prior_position)
-    if dir is not None:
-        np.savetxt(os.path.join(dir, 'cov_ellipses.csv'), run_ellipse_data, delimiter=',',
-                   header='pos_x,pos_y,major_axis_length,minor_axis_length,alpha')
+    # if dir is not None:
+    #     np.savetxt(os.path.join(dir, 'goal.csv'), np.array([goal]),  delimiter=',',header='x_goal,y_goal')
+    #     np.savetxt(os.path.join(dir,'linear_mpc.csv'), prior_run.obs[:,state_inds],  delimiter=',',header='x_linearmpc,y_linearmpc')
+    #     np.savetxt(os.path.join(dir,'gp_mpc.csv'), run.obs[:,state_inds],  delimiter=',',header='x_gpmpc,y_gpmpc')
+    #     np.savetxt(os.path.join(dir,'gp_mpc_horizon.csv'), horizon_states[state_inds].T, delimiter=',',
+    #                header='x_gpmpc-horizon,y_gpmpc-horizon')
+    #     np.savetxt(os.path.join(dir, 'linear_mpc_horizon.csv'), prior_horizon_states[state_inds].T, delimiter=',',
+    #                header='x_linear-horizon,y_linear-horizon')
+    #     run_ellipse_data = np.zeros((horizon_cov.shape[0], 2+1+1+1))
+    # for i in range(horizon_cov.shape[0]): # time horizon
+    #     cov = np.zeros((2, 2))
+    #     cov[0,0] = horizon_cov[i, state_inds[0], state_inds[0]]
+    #     cov[0,1] = horizon_cov[i, state_inds[0], state_inds[1]]
+    #     cov[1,0] = horizon_cov[i, state_inds[1], state_inds[0]]
+    #     cov[1,1] = horizon_cov[i, state_inds[1], state_inds[1]]
+    #     print(f"***************** PRINT INFO ************************")
+    #     print(f"cov: {cov}")
+    #     print(f"***************** PRINT INFO ************************")
+    #     position = horizon_states[state_inds, i]
+    #     prior_position = prior_horizon_states[state_inds,i]
+    #     if i == 1:
+    #         ax.plot(position[0], position[1], 'k.', label='GP-MPC Prediction horizon')
+    #         ax.plot(prior_position[0], prior_position[1], 'm.', label='Linear MPC Prediction horizon')
+    #         pos, major_axis_length, minor_axis_length, alpha = add_2d_cov_ellipse(position, cov, ax, legend=True)
+    #         if dir is not None:
+    #             run_ellipse_data[i,:2] = pos
+    #             run_ellipse_data[i,2] = major_axis_length
+    #             run_ellipse_data[i,3] = minor_axis_length
+    #             run_ellipse_data[i,4] = alpha
+    #     else:
+    #         ax.plot(position[0], position[1], 'k.')
+    #         ax.plot(prior_position[0], prior_position[1], 'm.')
+    #         pos, major_axis_length, minor_axis_length, alpha = add_2d_cov_ellipse(position, cov, ax)
+    #         if dir is not None:
+    #             run_ellipse_data[i, :2] = pos
+    #             run_ellipse_data[i, 2] = major_axis_length
+    #             run_ellipse_data[i, 3] = minor_axis_length
+    #             run_ellipse_data[i, 4] = alpha
+    #     ax.annotate(str(i), position)
+    #     ax.annotate(str(i), prior_position)
+    # if dir is not None:
+    #     np.savetxt(os.path.join(dir, 'cov_ellipses.csv'), run_ellipse_data, delimiter=',',
+    #                header='pos_x,pos_y,major_axis_length,minor_axis_length,alpha')
 
     ax.set_aspect('equal')
     ax.axis('equal')

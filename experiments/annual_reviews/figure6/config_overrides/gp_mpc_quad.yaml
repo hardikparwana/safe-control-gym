@@ -13,7 +13,7 @@ algo_config:
     - 1
     - 1
   gp_model_path: './trained_gp_model'
-  train_iterations: 150
+  train_iterations: 10 #150
   validation_iterations: 1
   optimization_iterations:
     - 2000
