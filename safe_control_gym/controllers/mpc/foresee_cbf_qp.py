@@ -24,6 +24,9 @@ import time
 import torch
 import gpytorch
 
+import jax.numpy as jnp
+from jax import jit, lax, grad
+
 from copy import deepcopy
 from skopt.sampler import Lhs
 from functools import partial
@@ -376,6 +379,76 @@ class FORESEE_GPMPC2(MPC):
         """Sets up nonlinear optimization problem including cost objective, variable bounds and dynamics constraints.
 
         """
+
+
+        # Here do my jax thing. leave casadi
+
+        nx, nu = self.model.nx, self.model.nu
+        T = self.T
+
+        A, B, dt = self.prior_ctrl.dfdx, self.prior_ctrl.dfdu, self.dt
+        x_eq = self.prior_ctrl.X_LIN[:,None].reshape(-1,1)
+        u_eq = self.prior_ctrl.U_LIN[:,None].reshape(-1,1)
+
+        # what to do about gaussian process ...
+        # just use GP jax?? better option at this point maybe
+
+
+        def controller(params, X, x_goal):
+
+            p = jnp.array([ X[0,0], X[2,0] ])
+            pdot = jnp.array([ X[1,0], X[3,0] ])
+
+            kx = params[0]
+            kv = params[1]
+            
+
+            # attraction
+            vd = kx * (p - x_goal)
+            ad_attraction = kv * (pdot - vd)
+
+            # Repulsion
+            ad_repulsion = 
+
+            T1 = kT1x * ad[0] + kT1y * ad[1] + kT10
+            T2 = kT1x * ad[0] + kT2y * ad[1] + kT20
+
+            retrun jnp.array([T1, T2]).reshape(-1,1)
+
+
+
+            thrust_d = 
+
+
+
+            ad = kv * (X[]  )
+
+
+        def predict(X, T):
+
+            states = jnp.zeros((nx, T))
+            states = states.at[:,0].set( X[:,0] )
+            def body(i, inputs):
+                states = inputs
+                u = controller(states[:,i])
+                states = states.at[:,i+1].set( step(states[:,i], u) )
+                return states            
+            return body(states)
+
+
+
+
+
+
+
+
+
+
+        ########################################################
+
+
+
+
         nx, nu = self.model.nx, self.model.nu
         T = self.T
         # Define optimizer and variables.
