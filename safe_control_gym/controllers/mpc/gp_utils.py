@@ -363,8 +363,8 @@ class GaussianProcessCollection:
         """
         @jit
         def body(z):
-            means = jnp.zeros((4,1))
-            covs = jnp.zeros((4,4))
+            means = jnp.zeros((6,1))
+            covs = jnp.zeros((6,4))
 
             for gp_ind, gp in enumerate(self.gp_list):            
                 pred_mu, pred_cov = gp.jax_predict(z=z)
@@ -736,10 +736,12 @@ class GaussianProcess:
 
         @jit
         def body(z):
-            K_z_ztrain = covSEard_jax( z, train_inputs.T, lengthscale.T, output_scale )
-            K_z_z = covSEard_jax( z, z, train_inputs.T, lengthscale.T, output_scale )
-            predict_mean = K_z_ztrain @ K_plus_noise_inv @ train_targets
-            predict_covariance = K_z_z - K_z_ztrain @ K_plus_noise_inv @ K_z_ztrain
+            K_z_ztrain = covSEard_jax( z, train_inputs.T, lengthscale.T, output_scale ).reshape(1,-1)
+            K_z_z = covSEard_jax( z, z, lengthscale.T, output_scale ).reshape(-1,1)
+            # print(f"K_z_ztrain: {K_z_ztrain}, K_z_z: {K_z_z}")
+            predict_mean = (K_z_ztrain @ K_plus_noise_inv @ train_targets).reshape(-1,1)
+            predict_covariance = K_z_z - K_z_ztrain @ K_plus_noise_inv @ K_z_ztrain.T
+            # print(f"mu: {predict_mean}, cov: {predict_covariance}")
             return predict_mean, predict_covariance
         return body
 

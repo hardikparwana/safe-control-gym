@@ -11,6 +11,8 @@ from safe_control_gym.controllers.mpc.mpc_utils import get_cost_weight_matrix
 from safe_control_gym.envs.benchmark_env import Task
 from safe_control_gym.envs.constraints import ConstraintList, GENERAL_CONSTRAINTS, create_constraint_list
 
+import pdb
+
 
 class MPC(BaseController):
     """MPC with full nonlinear model.
@@ -338,9 +340,10 @@ class MPC(BaseController):
             print(i, '-th step.')
             print(f"action: {action}")
             print(f"obs: {obs}")
-            print(f"reward: {reward}")
-            print(f"done: {done}")
-            print(f"info: {info}")
+            # print(f"reward: {reward}")
+            # print(f"done: {done}")
+            # print(f"info: {info}")
+            # pdb.set_trace()
             print()
             if render:
                 env.render()

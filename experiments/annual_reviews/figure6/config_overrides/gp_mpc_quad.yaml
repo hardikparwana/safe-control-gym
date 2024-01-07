@@ -1,7 +1,7 @@
 output_dir: temp-data/figure6
 algo_config:
   seed: 5309287 #6314
-  horizon: 3 #10
+  horizon: 10
   r_mpc:
     - 0.1
     - 0.1
@@ -13,7 +13,7 @@ algo_config:
     - 1
     - 1
   gp_model_path: './trained_gp_model'
-  train_iterations: 10 #150
+  train_iterations: 150
   validation_iterations: 1
   optimization_iterations:
     - 2000

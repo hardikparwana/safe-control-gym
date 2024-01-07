@@ -24,8 +24,9 @@ import time
 import torch
 import gpytorch
 
+import jax
 import jax.numpy as jnp
-from jax import jit, lax, grad
+from jax import jit, lax, grad, value_and_grad
 
 from copy import deepcopy
 from skopt.sampler import Lhs
@@ -41,11 +42,13 @@ from safe_control_gym.envs.benchmark_env import Task
 from safe_control_gym.controllers.mpc.foresee_utils import *
 import pdb
 
-
 class FORESEE_CBF_QP(MPC):
     """MPC with Gaussian Process as dynamics residual and FORESEE for uncertainty propagation. 
 
     """
+    predict = []
+    predict_grad = []
+    reward_func = []
 
     def __init__(
             self,
@@ -125,6 +128,32 @@ class FORESEE_CBF_QP(MPC):
             output_dir=output_dir,
             additional_constraints=additional_constraints,
             **kwargs)
+        
+        # Setup controller parameters
+        # kx = 1.0
+        # kv = 1.0
+        # kRx = 1.0
+        # kRv = 1.0
+        # kT1x = -0.2
+        # kT1y = 0.2
+        # kT10 = 5.0
+        # kT2x = 0.2
+        # kT2y = 1.0
+        # kT20 = 5.0
+
+        kx = 0.2 #0.2 #0.1 #0.5 # Attarction
+        kv = 1.5 #0.20000002#  0.3 # Attraction
+        kRx = 1.0 # Repulsion
+        kRv = 1.0 # Repulsion
+        kT1x = -0.2
+        kT1y = 0.2
+        kT10 = 5.0
+        kT2x = 0.2
+        kT2y = 1.0
+        kT20 = 5.0
+        self.params = jnp.array([ kx, kv, kRx, kRv, kT1x, kT1y, kT10, kT2x, kT2y, kT20 ])
+
+
         # Setup environments.
         self.env_func = env_func
         self.env = env_func(randomized_init=False)
@@ -162,6 +191,8 @@ class FORESEE_CBF_QP(MPC):
         self.last_obs = None
         self.last_action = None
         self.initial_rollout_std = initial_rollout_std
+
+        
 
     def setup_prior_dynamics(self):
         """Computes the LQR gain used for propograting GP uncertainty from the prior model dynamics.
@@ -342,47 +373,14 @@ class FORESEE_CBF_QP(MPC):
         self.results_dict['input_horizon_cov'].append(input_covariances)
         return state_constraint_set, input_constraint_set
 
-    # def precompute_sparse_gp_values(self):
-    #     """Uses the last MPC solution to precomupte values associated with the FITC GP approximation.
-
-    #     """
-    #     n_data_points = self.gaussian_process.n_training_samples
-    #     dim_gp_inputs = len(self.input_mask)
-    #     dim_gp_outputs = len(self.target_mask)
-    #     inputs = self.train_data['train_inputs']
-    #     targets = self.train_data['train_targets']
-    #     # Get the inducing points.
-    #     if self.x_prev is not None and self.u_prev is not None and self.weights_prev is not None:
-    #         # Use the previous MPC solution as in Hewing 2019.
-    #         z_ind = np.hstack((self.x_prev[:,:-1].T, self.u_prev.T))
-    #         z_ind = z_ind[:,self.input_mask]
-    #     else:
-    #         # If there is no previous solution. Choose T random training set points.
-    #         inds = self.env.np_random.choice(range(n_data_points), size=self.T)
-    #         #z_ind = self.data_inputs[inds][:, self.input_mask]
-    #         z_ind = inputs[inds][:, self.input_mask]
-    #     K_zind_zind = self.gaussian_process.kernel(torch.Tensor(z_ind).double())
-    #     K_zind_zind_inv = self.gaussian_process.kernel_inv(torch.Tensor(z_ind).double())
-    #     K_x_zind = self.gaussian_process.kernel(torch.from_numpy(inputs[:, self.input_mask]).double(),
-    #                                             torch.Tensor(z_ind).double())
-    #     Q_X_X = K_x_zind @ K_zind_zind_inv @ K_x_zind.transpose(1,2)
-    #     Gamma = torch.diagonal(self.gaussian_process.K_plus_noise + Q_X_X, 0, 1, 2)
-    #     Gamma_inv = torch.diag_embed(1/Gamma)
-    #     Sigma = torch.pinverse(K_zind_zind + K_x_zind.transpose(1,2) @ Gamma_inv @ K_x_zind)
-    #     mean_post_factor = torch.zeros((dim_gp_outputs, self.T))
-    #     for i in range(dim_gp_outputs):
-    #         mean_post_factor[i] = Sigma[i] @ K_x_zind[i].T @ Gamma_inv[i] @ \
-    #                               torch.from_numpy(targets[:,self.target_mask[i]]).double()
-    #     return mean_post_factor.detach().numpy(), Sigma.detach().numpy(), K_zind_zind_inv.detach().numpy(), z_ind
-
     @staticmethod
     def controller(params, X, x_goal, A, b):
 
             p = jnp.array([ X[0,0], X[2,0] ]).reshape(-1,1)
             pdot = jnp.array([ X[1,0], X[3,0] ]).reshape(-1,1)
 
-            kx = params[0]
-            kv = params[1]
+            kx = 0.09 #params[0]
+            kv = 0.05 #params[1]
             kRx = params[2]
             kRv = params[3]
             kT1x = params[4]
@@ -391,239 +389,117 @@ class FORESEE_CBF_QP(MPC):
             kT2x = params[7]
             kT2y = params[8]
             kT20 = params[9]
+            kR = 60.0 #0.1
+            kRv = 10.0 #0.05 #0.01
             
             # attraction
             # print(f"p: {p}, goal: {x_goal}")
-            vd = kx * (p - jnp.array([x_goal[0,0], x_goal[2,0]]).reshape(-1,1) )
-            ad_attraction = kv * (pdot - vd)
+            # vd = - kx * jnp.clip((p - jnp.array([x_goal[0,0], x_goal[2,0]]).reshape(-1,1) ), -1.0, 1.0)
+            # vd = - kx * jnp.clip( p - jnp.array([-1.0, 0.5]).reshape(-1,1), -1.0, 1.0 )
+            # ad_attraction = - kv * (pdot - vd)
             
+            ad_attraction = - kx * (p - jnp.array([x_goal[0,0], x_goal[2,0]]).reshape(-1,1)) - kv * pdot 
+
             # Repulsion
             # print(f"A: {A}, b:{b}")
-            vd_repulsion = kRx * jnp.array([A[0,0], A[0,2]]).reshape(-1,1)  * 1.0 / ( b.reshape(-1,1) - A @ X )
+            vd_repulsion = - kRx * jnp.array([A[0,0], A[0,2]]).reshape(-1,1)  * 1.0 / ( b.reshape(-1,1) - A @ X )
             ad_repulsion = jnp.zeros((2,1)) #kRv * ( pdot - vd_repulsion )
+
+            #Based on perfect knowledge of dynamics
+            M = 0.027  #0.027 # 1.0
+            I = 1.4e-5  #0.5
+            g = 9.80
+            L = 0.028
 
             # toal acceleration
             ad = ad_attraction + ad_repulsion
+            target_thrust = ad + jnp.array([ 0, M*g ]).reshape(-1,1)
+            theta_d = jnp.arctan2( target_thrust[0,0], target_thrust[1,0] )
 
-            T1 = kT1x * ad[0,0] + kT1y * ad[1,0] + kT10
-            T2 = kT2x * ad[0,0] + kT2y * ad[1,0] + kT20
+            
 
-            action = jnp.array([T1, T2]) #.reshape(-1,1) 
 
-            action = action / jnp.max( jnp.array([jnp.linalg.norm(action), 0.01]) ) * 2.0
+            scalar_thrust = target_thrust.T @ jnp.array([ jnp.sin(X[4,0]), jnp.cos(X[4,0]) ])
+            theta_ddot = - kR * (X[4,0]-theta_d) - kRv * X[5,0]
+            moment = I * theta_ddot
 
-            print(f"action: {action}, a: {ad}, att: {ad_attraction}, rep: {ad_repulsion}")
+            # moment = I * 0.001
+
+            T2 = 0.5 * ( scalar_thrust + moment / L )
+            T1 = 0.5 * ( scalar_thrust - moment / L )
+            
+
+            # T1 = 0.5 * ( ad.T @ jnp.array([jnp.sin(X[4,0]), jnp.cos(X[4,0])]).reshape(-1,1) + M*g*jnp.cos(X[4,0]) + (kR * jnp.clip((X[4,0]-theta_d), -jnp.pi/12, jnp.pi/12) / L * jnp.sqrt(2) ) ) #+ I * X[5,0]**2)/L )
+            # T2 = 0.5 * ( ad.T @ jnp.array([jnp.sin(X[4,0]), jnp.cos(X[4,0])]).reshape(-1,1) + M*g*jnp.cos(X[4,0]) + ( - kR * jnp.clip((X[4,0]-theta_d), -jnp.pi/12, jnp.pi/12) / L * jnp.sqrt(2) ) ) #- I * X[5,0]**2)/L )
 
             # pdb.set_trace()
-            action = jnp.array([0.3, 1.0])
+            action = jnp.array([T1[0], T2[0]])
+
+            # action = jnp.clip(action, 0.0, None )
+            # action = action / jnp.max( jnp.array([jnp.linalg.norm(action), 0.01]) ) * 0.2
+            # print(f"action: {action}")
+            # action = 0.2 * jnp.tanh(action)
+
+            print(f"theta: {X[4,0]}, thetad: {theta_d}")
+            # print(f"action: {action}, a: {ad}, att: {ad_attraction}, rep: {ad_repulsion}")
+
+            # pdb.set_trace()
+            # action = jnp.array([0.3, 1.0])
             return action
-    
-    # def dynamics_step(X, u, A, B, x_eq, u_eq):
+       
+    def setup_predict(self, T): #, X, T, A, B, x_eq, u_eq):
 
-    #     x_next = A @ (X - x_eq) + B @ (u - u_eq) +\
-    #         x_eq + gp_jax.predict()
+            # @jit
+            def predict_future(params, X, A, B, x_eq, u_eq, X_GOAL, consA, consb):             
+                states = jnp.zeros((6, T+1))
+                states = states.at[:,0].set( X[:,0] )
+                actions = jnp.zeros((2, T))
 
+                # for i in range(T):
+                #     u = FORESEE_CBF_QP.controller(params, states[:,i].reshape(-1,1), X_GOAL, consA, consb).reshape(-1,1)
+                #     z = jnp.append( states[:,i].reshape(-1,1), u, axis=0 )
+                #     pred_mu, pred_cov = self.gaussian_process.jax_predict(z=z)
+                #     next_state = A @ (states[:,i].reshape(-1,1) - x_eq) + B @ (u - u_eq) + x_eq + pred_mu
+                #     states = states.at[:,i+1].set( next_state[:,0 ] )
+                #     # pdb.set_trace()
+                #     actions = actions.at[:,i].set( u[:,0] )
+                # return states, actions        
+            
 
-
+                def body(i, inputs):
+                    states, actions = inputs
+                    u = FORESEE_CBF_QP.controller(params, states[:,i].reshape(-1,1), X_GOAL, consA, consb).reshape(-1,1)
+                    z = jnp.append( states[:,i].reshape(-1,1), u, axis=0 )
+                    pred_mu, pred_cov = self.gaussian_process.jax_predict(z=z)
+                    next_state = A @ (states[:,i].reshape(-1,1) - x_eq) + B @ (u - u_eq) + x_eq + pred_mu
+                    states = states.at[:,i+1].set( next_state[:,0 ] )
+                    actions = actions.at[:,i].set( u[:,0] )
+                    return states, actions        
+                return lax.fori_loop( 0, T, body, (states, actions))
+            return predict_future
     
     @staticmethod
-    def predict(X, T, A, B, x_eq, u_eq):
+    def reward(Xs, x_goal):
+        # return jnp.sum( jnp.square(Xs[0,:]-x_goal[0,0]) )
+        return jnp.sum( jnp.square(Xs[2,-1]-x_goal[2,0]) ) #+ jnp.sum( jnp.square(Xs[0,-1]-x_goal[0,0]) )
 
-            states = jnp.zeros((6, T))
-            states = states.at[:,0].set( X[:,0] )
-            def body(i, inputs):
-                states = inputs
-                u = FORESEE_CBF_QP.controller(states[:,i])
-                states = states.at[:,i+1].set( dynamics_step(states[:,i], u, A, B, x_eq, u_eq) )
-                return states            
-            return body(states)
 
 
     def setup_gp_optimizer(self):
         """Sets up nonlinear optimization problem including cost objective, variable bounds and dynamics constraints.
 
         """
+
+        FORESEE_CBF_QP.predict = self.setup_predict(8)#self.T)
+
+        FORESEE_CBF_QP.reward_func = lambda params, X, A, B, x_eq, u_eq, X_GOAL, consA, consb: FORESEE_CBF_QP.reward( FORESEE_CBF_QP.predict(params, X, A, B, x_eq, u_eq, X_GOAL, consA, consb)[0], X_GOAL )
+
+        FORESEE_CBF_QP.predict_grad = jit( value_and_grad( FORESEE_CBF_QP.reward_func, 0 ) )
         return
-
-        # Here do my jax thing. leave casadi
-
-        nx, nu = self.model.nx, self.model.nu
-        T = self.T
-
-        A, B, dt = self.prior_ctrl.dfdx, self.prior_ctrl.dfdu, self.dt
-        x_eq = self.prior_ctrl.X_LIN[:,None].reshape(-1,1)
-        u_eq = self.prior_ctrl.U_LIN[:,None].reshape(-1,1)
-
-        # what to do about gaussian process ...
-        # just use GP jax?? better option at this point maybe
-
-
-        
-
-
-
-
-
-
-
-
-
 
         ########################################################
 
 
-
-
-        nx, nu = self.model.nx, self.model.nu
-        T = self.T
-        # Define optimizer and variables.
-        opti = cs.Opti()
-        # States.
-        # x_var = opti.variable(nx*(2*nx+1), T + 1)
-        # weights_var = opti.variable( 2*nx+1, T+1)
-        x_var_mu = opti.variable(nx, T + 1)
-        x_var_cov = opti.variable(nx, T + 1)
-        # x_var_skew = opti.variable(nx, T + 1)
-        # x_var_kurt = opti.variable(nx, T + 1)
-        
-        # Inputs.
-        u_var = opti.variable(nu, T)
-        # Initial state.
-        # x_init = opti.parameter(nx*(2*nx+1), 1)
-        # weights_init = opti.parameter( 2*nx+1, 1)
-        x_init_mu = opti.parameter(nx, 1)
-        x_init_cov = opti.parameter(nx, 1)
-        # x_init_skew = opti.variable(nx, T + 1)
-        # x_init_kurt = opti.variable(nx, T + 1)
-        # Reference (equilibrium point or trajectory, last step for terminal cost).
-        x_ref = opti.parameter(nx, T + 1)
-
-        # Chance constraint limits.
-        state_constraint_set = []
-        for state_constraint in self.constraints.state_constraints:
-            state_constraint_set.append(opti.parameter(state_constraint.num_constraints, T+1))
-        input_constraint_set = []
-        for input_constraint in self.constraints.input_constraints:
-            input_constraint_set.append(opti.parameter(input_constraint.num_constraints, T))
-            
-        # Sparse GP mean postfactor matrix.
-        mean_post_factor = opti.parameter(len(self.target_mask), T)
-        # Sparse GP inducing points.
-        z_ind = opti.parameter(T, len(self.input_mask))
-        # Cost (cumulative).
-        cost = 0
-        cost_func = self.model.loss
-        for t in range(T):
-            cost += cost_func(x=x_var_mu[:,t],
-                              u=u_var[:, t],
-                              Xr=x_ref[:, t],
-                              Ur=np.zeros((nu, 1)),
-                              Q=self.Q,
-                              R=self.R)["l"]
-        # Terminal cost.
-        cost += cost_func(x=x_var_mu[:,T],
-                          u=np.zeros((nu, 1)),
-                          Xr=x_ref[:, -1],
-                          Ur=np.zeros((nu, 1)),
-                          Q=self.Q,
-                          R=self.R)["l"]
-        opti.minimize(cost)
-        # z = cs.vertcat(x_var[:,:-1], u_var)
-        # z = z[self.input_mask,:]
-        for t in range(self.T):
-            # Dynamics constraints using the dynamics of the prior and the mean of the GP.
-            # This follows the tractable dynamics formulation in Section III.B in Hewing 2019.
-            # Note that for the GP approximation, we are purposely using elementwise multiplication *.
-            if self.sparse_gp:
-                print("Sparse GP NOT SUPPORTED")
-                exit()
-                next_state = self.prior_dynamics_func(x0=x_var[:, i]-self.prior_ctrl.X_LIN[:,None],
-                                                      p=u_var[:, i]-self.prior_ctrl.U_LIN[:,None])['xf'] + \
-                self.prior_ctrl.X_LIN[:,None] + self.Bd @ cs.sum2(self.K_z_zind_func(z1=z[:,i].T, z2=z_ind)['K'] * mean_post_factor)
-            else:
-                # Sparse GP approximation doesn't always work well, thus, use Exact GP regression. This is much slower,
-                # but for unstable systems, make performance much better.
-
-                # Sigma Point Expand
-                sigma_points, weights = generate_sigma_points_gaussian( cs.reshape(x_var_mu[:,t],-1,1), cs.diag( x_var_cov[:,t] ), np.zeros((nx,1)), 1.0 )
-
-                j = 0                
-                z = cs.vertcat(sigma_points[:,j], u_var[:,t])
-                pred = self.gaussian_process.casadi_predict(z=z)
-                cov = np.zeros((nx, nx)) #self.Bd @ pred['covariance'] @ self.Bd.T
-                mu = self.Bd @ cs.reshape(pred['mean'], 6,1) + cs.reshape(self.prior_dynamics_func(x0=cs.reshape(sigma_points[:,j]-self.prior_ctrl.X_LIN[:,None],6,1),
-                                                        p=cs.reshape(u_var[:, t],2,1)-self.prior_ctrl.U_LIN[:,None])['xf'], 6,1) + \
-                                cs.reshape(self.prior_ctrl.X_LIN[:,None], 6,1)
-                root_term = get_ut_cov_root_diagonal(cov)  #np.zeros((6,6)) #get_ut_cov_root_diagonal(cov) 
-                # new_points, temp_weights = generate_sigma_points_gaussian( mu, root_term, cs.reshape(sigma_points[:,j], -1,1), 1.0 )
-                new_points, temp_weights = generate_sigma_points_gaussian( mu, root_term, np.zeros((nx,1)), 1.0 )
-                new_weights = temp_weights * weights[:,j]                    
-                for j in range(1,2*nx+1):
-                    z = cs.vertcat(sigma_points[:,j], u_var[:,t])
-                    pred = self.gaussian_process.casadi_predict(z=z)
-                    cov = np.zeros((nx, nx)) #self.Bd @ pred['covariance'] @ self.Bd.T
-                    mu = self.Bd @ cs.reshape(pred['mean'], 6,1) + cs.reshape(self.prior_dynamics_func(x0=cs.reshape(sigma_points[:,j]-self.prior_ctrl.X_LIN[:,None],6,1),
-                                                        p=cs.reshape(u_var[:, t],2,1)-self.prior_ctrl.U_LIN[:,None])['xf'], 6,1) + \
-                                cs.reshape(self.prior_ctrl.X_LIN[:,None], 6,1)
-                    root_term = get_ut_cov_root_diagonal(cov)  #np.zeros((6,6)) #get_ut_cov_root_diagonal(cov) 
-                    temp_points, temp_weights = generate_sigma_points_gaussian( mu, root_term, np.zeros((nx,1)), 1.0 )
-                    new_points = cs.hcat([ new_points, temp_points ])
-                    new_weights = cs.hcat([ new_weights, temp_weights * weights[:,j]  ])  
-
-                # Sigma Point Compress
-                # compressed_sigma_points, compressed_weights = sigma_point_compress(new_points, new_weights)
-                # compressed_mu, compressed_cov = get_mean_cov( compressed_sigma_points, compressed_weights )
-                compressed_mu, compressed_cov = get_mean_cov( new_points, new_weights )
-                # compressed_sigma_points = cs.reshape(x_var[:,t], nx, 2*nx+1)
-
-            # GP Dynamics constraint as in FORESEE
-            opti.subject_to( x_var_mu[:, t+1] == compressed_mu[:,0] ) #  cs.reshape(compressed_mu, -1,1) )
-            opti.subject_to( x_var_cov[:, t+1] == cs.diag( compressed_cov ) )  #cs.reshape(compressed_sigma_points, -1,1) )
-
-            for s_i, state_constraint in enumerate(self.state_constraints_sym):
-                opti.subject_to(state_constraint(x_var_mu[:, t]) <= state_constraint_set[s_i][:,t])
-            for u_i, input_constraint in enumerate(self.input_constraints_sym):
-                opti.subject_to(input_constraint(u_var[:, t]) <= input_constraint_set[u_i][:,t])
-
-        # Final state constraints.
-        for s_i, state_constraint in enumerate(self.state_constraints_sym):
-            opti.subject_to(state_constraint(x_var_mu[:, -1]) <= state_constraint_set[s_i][:,-1])
-
-        # Initial condition constraints.
-        opti.subject_to(x_var_mu[:, 0] == x_init_mu)
-        opti.subject_to(x_var_cov[:, 0] == x_init_cov)
-
-        # Bound on the value of weights
-        opti.subject_to( cs.vec(x_var_cov) >= 0 )
-        # opti.subject_to( cs.vec(weights_var) >= -1000 )
-
-        opti.subject_to( cs.vec(u_var) <= 0.2 )
-        opti.subject_to( cs.vec(u_var) >= 0.0 )
-
-        # add MY state constraints
-        # for state_constraint in self.constraints.state_constraints:
-        #     opti.subject_to( cd.vec(state_constraint.A @ x_var_mu - cs.reshape(state_constraint.b, state_constraint.b.size, 1)) <= 0 )   
-
-        # Create solver (IPOPT solver in this version).
-        opts = {"ipopt.print_level": 4,
-                "ipopt.sb": "yes",
-                "ipopt.max_iter": 1000,#100, #100,
-                "print_time": 1}
-        opti.solver('ipopt', opts)
-        self.opti_dict = {
-            "opti": opti,
-            "x_var_mu": x_var_mu,
-            "x_var_cov": x_var_cov,
-            "u_var": u_var,
-            "x_init_mu": x_init_mu,
-            "x_init_cov": x_init_cov,
-            "x_ref": x_ref,
-            "state_constraint_set": state_constraint_set,
-            "input_constraint_set": input_constraint_set,
-            "mean_post_factor": mean_post_factor,
-            "z_ind": z_ind,
-            "cost": cost
-        }
 
     def select_action_with_gp(self,
                               obs
@@ -637,132 +513,36 @@ class FORESEE_CBF_QP(MPC):
              np.array: input/action to the task/env.
 
          """
-        z = jnp.append( obs.reshape(-1,1), jnp.zeros((2,1)), axis=0 )
-        self.gaussian_process.jax_predict(z=z)
         
-        kx = 1.0
-        kv = 1.0
-        kRx = 1.0
-        kRv = 1.0
-        kT1x = -1.0
-        kT1y = 1.0
-        kT10 = 1.0
-        kT2x = 1.0
-        kT2y = 1.0
-        kT20 = 1.0
-        params = [ kx, kv, kRx, kRv, kT1x, kT1y, kT10, kT2x, kT2y, kT20 ]
+        print(f"time step: {self.dt}")
+        # Select current action
+        z = jnp.append( obs.reshape(-1,1), jnp.zeros((2,1)), axis=0 )
+        self.gaussian_process.jax_predict(z=z)     
+        action = FORESEE_CBF_QP.controller(self.params, obs.reshape(-1,1), self.env.X_GOAL.reshape(-1,1), self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
 
-        action = FORESEE_CBF_QP.controller(params, obs.reshape(-1,1), self.env.X_GOAL.reshape(-1,1), self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
+        # Update parameters
+        nx, nu = self.model.nx, self.model.nu
+        T = self.T
 
+        A, B, dt = self.prior_ctrl.dfdx, self.prior_ctrl.dfdu, self.dt
+        x_eq = self.prior_ctrl.X_LIN[:,None].reshape(-1,1)
+        u_eq = self.prior_ctrl.U_LIN[:,None].reshape(-1,1)
+
+        t0 = time.time()
+        
+
+        # num_iterations = 1
+        # print(f"HELLOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO")
+        # for i in range(num_iterations):
+        #     states, actions = FORESEE_CBF_QP.predict(self.params, obs.reshape(-1,1), A, B, x_eq, u_eq, self.env.X_GOAL.reshape(-1,1), self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
+        #     reward, grads = FORESEE_CBF_QP.predict_grad( jnp.copy(self.params), obs.reshape(-1,1), A, B, x_eq, u_eq, self.env.X_GOAL.reshape(-1,1), self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b )
+        #     # print(f"reward: {reward}, grad: {grads}")
+        #     pdb.set_trace()
+        #     self.params = self.params - 0.1 * jnp.clip( grads, -1.0, 1.0 )
+        # print(f"************************************************* time: {time.time()-t0} *********************************************")
+        # print(f"*************** params: {self.params}")
+        
         return action         
-        # action = np.array([0.3, 0.4])
-        # pdb.set_trace()
-        # return action
-    
-        opti_dict = self.opti_dict
-        opti = opti_dict["opti"]
-        x_var_mu = opti_dict["x_var_mu"]
-        x_var_cov = opti_dict["x_var_cov"]
-        u_var = opti_dict["u_var"]
-        x_init_mu = opti_dict["x_init_mu"]
-        x_init_cov = opti_dict["x_init_cov"]
-        x_ref = opti_dict["x_ref"]
-        state_constraint_set = opti_dict["state_constraint_set"]
-        input_constraint_set = opti_dict["input_constraint_set"]
-        # mean_post_factor = opti_dict["mean_post_factor"]
-        # z_ind = opti_dict["z_ind"]
-        cost = opti_dict["cost"]
-        # Assign the initial state.
-        # sigma_points_init, sigma_weights_init = generate_sigma_points_gaussian( obs.reshape(-1,1), np.zeros(self.model.nx, self.model.nx), 0*obs.reshape(-1,1), 1.0 )
-        # opti.set_value( x_init, cs.reshape(sigma_points_init, -1, 1) )
-        # opti.set_value( weights_init, cs.reshape(sigma_weights_init, -1,1) )
-
-        opti.set_value( x_init_mu, obs.reshape(-1,1) )
-        opti.set_value( x_init_cov, np.zeros((self.model.nx, 1)) )
-
-        # opti.set_value( x_init, np.tile(obs.reshape(-1,1), (2*self.model.nx+1, 1)) )
-        # opti.set_value( weights_init, np.ones((2*self.model.nx+1,1)) )
-
-
-
-        # Assign reference trajectory within horizon.
-        goal_states = self.get_references()
-        opti.set_value(x_ref, goal_states)
-        if self.mode == "tracking":
-            self.traj_step += 1
-
-        # Set the probabilistic state and input constraint set limits.
-        state_constraint_set_prev, input_constraint_set_prev = self.precompute_probabilistic_limits()
-        for si in range(len(self.constraints.state_constraints)):
-            opti.set_value(state_constraint_set[si], state_constraint_set_prev[si])
-        for ui in range(len(self.constraints.input_constraints)):
-            opti.set_value(input_constraint_set[ui], input_constraint_set_prev[ui])
-
-        # mean_post_factor_val, Sigma, K_zind_zind_inv, z_ind_val = self.precompute_sparse_gp_values()
-        # opti.set_value(mean_post_factor, mean_post_factor_val)
-        # opti.set_value(z_ind, z_ind_val)
-
-        # Initial guess for the optimization problem.
-        if self.warmstart and self.x_prev_mu is not None and self.u_prev is not None and self.x_prev_cov is not None:
-            # shift previous solutions by 1 step
-            x_guess_mu = deepcopy(self.x_prev_mu)
-            x_guess_cov = deepcopy(self.x_prev_cov)
-            u_guess = deepcopy(self.u_prev)
-            x_guess_mu[:, :-1] = x_guess_mu[:, 1:]
-            x_guess_mu[:, 0] = obs.reshape(-1,1)[:,0]
-            x_guess_cov[:, :-1] = x_guess_cov[:, 1:]
-            x_guess_cov[:, 0] = np.zeros(self.model.nx)
-            u_guess[:-1] = u_guess[1:]
-            # opti.set_initial(x_var, np.tile(x_guess, (2*self.model.nx+1, 1)))
-            opti.set_initial(x_var_mu, x_guess_mu)
-            opti.set_initial(x_var_cov, x_guess_cov)
-            opti.set_initial(u_var, u_guess)
-        # Solve the optimization problem.
-        try:
-            sol = opti.solve()
-            x_val_mu, x_val_cov, u_val = sol.value(x_var_mu), sol.value(x_var_cov), sol.value(u_var)
-        except RuntimeError:
-            x_val_mu, x_val_cov, u_val = opti.debug.value(x_var_mu), opti.debug.value(x_var_cov), opti.debug.value(u_var)
-        u_val = np.atleast_2d(u_val)
-
-        print(f" ****************************  INFO: ********************************** \n")
-        print(f"x_init:{ obs.reshape(1,-1) }, x_val: {x_val_mu[:,0]} , cov: {x_val_cov[:,0]} ")
-        print(f"\n covs: {x_val_cov}")
-        print(f"\n mus: {x_val_mu}")
-        print(f"\n inputs: {u_val}")
-        print(f" ****************************  INFO: ********************************** \n")
-
-        self.x_prev_mu = x_val_mu #x_val_mu
-        self.x_prev_cov = x_val_cov
-        self.u_prev = u_val
-
-        self.results_dict['horizon_states'].append(deepcopy(x_val_mu))
-        self.results_dict['horizon_inputs'].append(deepcopy(self.u_prev))
-        # state_covariances = np.zeros((self.T+1, self.model.nx, self.model.nx))
-        # for t in range(self.T+1):
-        #     state_covariances[t] = np.diag( x_val_cov[:,t] )
-        # self.results_dict['state_horizon_cov'].append( state_covariances )
-        zi = np.hstack((x_val_mu[:,0], u_val[:,0]))
-        zi = zi[self.input_mask]
-        # gp_contribution = np.sum(self.K_z_zind_func(z1=zi, z2=z_ind_val)['K'].toarray() * mean_post_factor_val,axis=1)
-        # print("GP Mean eq Contribution: %s" % gp_contribution)
-        zi = np.hstack((x_val_mu[:,0], u_val[:,0]))
-        pred, _, _ = self.gaussian_process.predict(zi[None,:])
-        print("True GP value: %s" % pred.numpy())
-        lin_pred = self.prior_dynamics_func(x0=x_val_mu[:,0]-self.prior_ctrl.X_LIN,
-                                            p=u_val[:, 0]-self.prior_ctrl.U_LIN)['xf'].toarray() + \
-                                            self.prior_ctrl.X_LIN[:,None]
-        self.results_dict['linear_pred'].append(lin_pred)
-        # self.results_dict['gp_mean_eq_pred'].append(gp_contribution)
-        self.results_dict['gp_pred'].append(pred.numpy())
-        # Take the first one from solved action sequence.
-        if u_val.ndim > 1:
-            action = u_val[:, 0]
-        else:
-            action = np.array([u_val[0]])
-        self.prev_action = action,
-        # pdb.set_trace()
-        return action
 
     def learn(self,
               input_data=None,
@@ -788,74 +568,89 @@ class FORESEE_CBF_QP(MPC):
         if self.online_learning:
             input_data = np.zeros((self.train_iterations, len(self.input_mask)))
             target_data = np.zeros((self.train_iterations, len(self.target_mask)))
-        if input_data is None and target_data is None:
-            train_inputs = []
-            train_targets = []
-            train_info = []
+        get_new_data = False
+        if get_new_data:
+            if input_data is None and target_data is None:
+                train_inputs = []
+                train_targets = []
+                train_info = []
 
-            ############
-            # Use Latin Hypercube Sampling to generate states withing environment bounds.
-            lhs_sampler = Lhs(lhs_type='classic', criterion='maximin')
-            limits = [(self.env.INIT_STATE_RAND_INFO[key].low, self.env.INIT_STATE_RAND_INFO[key].high) for key in
-                      self.env.INIT_STATE_RAND_INFO]
-            # todo: parameterize this if we actually want it.
-            num_eq_samples = 0
-            samples = lhs_sampler.generate(limits,
-                                           self.train_iterations + self.validation_iterations - num_eq_samples,
-                                           random_state=self.seed)
-            # todo: choose if we want eq samples or not.
-            delta = 0.01
-            eq_limits = [(self.prior_ctrl.X_LIN[eq]-delta, self.prior_ctrl.X_LIN[eq]+delta) for eq in range(self.model.nx)]
-            if num_eq_samples > 0:
-                eq_samples = lhs_sampler.generate(eq_limits, num_eq_samples, random_state=self.seed)
-                #samples = samples.append(eq_samples)
-                init_state_samples = np.array(samples + eq_samples)
+                ############
+                # Use Latin Hypercube Sampling to generate states withing environment bounds.
+                lhs_sampler = Lhs(lhs_type='classic', criterion='maximin')
+                limits = [(self.env.INIT_STATE_RAND_INFO[key].low, self.env.INIT_STATE_RAND_INFO[key].high) for key in
+                        self.env.INIT_STATE_RAND_INFO]
+                # todo: parameterize this if we actually want it.
+                num_eq_samples = 0
+                samples = lhs_sampler.generate(limits,
+                                            self.train_iterations + self.validation_iterations - num_eq_samples,
+                                            random_state=self.seed)
+                # todo: choose if we want eq samples or not.
+                delta = 0.01
+                eq_limits = [(self.prior_ctrl.X_LIN[eq]-delta, self.prior_ctrl.X_LIN[eq]+delta) for eq in range(self.model.nx)]
+                if num_eq_samples > 0:
+                    eq_samples = lhs_sampler.generate(eq_limits, num_eq_samples, random_state=self.seed)
+                    #samples = samples.append(eq_samples)
+                    init_state_samples = np.array(samples + eq_samples)
+                else:
+                    init_state_samples = np.array(samples)
+                input_limits = np.vstack((self.constraints.input_constraints[0].lower_bounds,
+                                        self.constraints.input_constraints[0].upper_bounds)).T
+                input_samples = lhs_sampler.generate(input_limits,
+                                                    self.train_iterations + self.validation_iterations,
+                                                    random_state=self.seed)
+                input_samples = np.array(input_samples) # not being used currently
+                #seeds = self.env.np_random.randint(0,99999, size=self.train_iterations + self.validation_iterations)
+                seeds = self.env.np_random.integers(0,99999, size=self.train_iterations + self.validation_iterations)
+                for i in range(self.train_iterations + self.validation_iterations):
+                    # For random initial state training.
+                    init_state = init_state_samples[i,:]
+                    # Collect data with prior controller.
+                    run_env = self.env_func(init_state=init_state, randomized_init=False, seed=int(seeds[i]))
+                    episode_results = self.prior_ctrl.run(env=run_env, max_steps=1)
+                    run_env.close()
+                    x_obs = episode_results['obs'][-3:,:]
+                    u_seq = episode_results['action'][-1:,:]
+                    run_env.close()
+                    x_seq = x_obs[:-1,:]
+                    x_next_seq = x_obs[1:,:]
+                    train_inputs_i, train_targets_i = self.preprocess_training_data(x_seq, u_seq, x_next_seq)
+                    train_inputs.append(train_inputs_i)
+                    train_targets.append(train_targets_i)
+                ###########
             else:
-                init_state_samples = np.array(samples)
-            input_limits = np.vstack((self.constraints.input_constraints[0].lower_bounds,
-                                      self.constraints.input_constraints[0].upper_bounds)).T
-            input_samples = lhs_sampler.generate(input_limits,
-                                                 self.train_iterations + self.validation_iterations,
-                                                 random_state=self.seed)
-            input_samples = np.array(input_samples) # not being used currently
-            #seeds = self.env.np_random.randint(0,99999, size=self.train_iterations + self.validation_iterations)
-            seeds = self.env.np_random.integers(0,99999, size=self.train_iterations + self.validation_iterations)
-            for i in range(self.train_iterations + self.validation_iterations):
-                # For random initial state training.
-                init_state = init_state_samples[i,:]
-                # Collect data with prior controller.
-                run_env = self.env_func(init_state=init_state, randomized_init=False, seed=int(seeds[i]))
-                episode_results = self.prior_ctrl.run(env=run_env, max_steps=1)
-                run_env.close()
-                x_obs = episode_results['obs'][-3:,:]
-                u_seq = episode_results['action'][-1:,:]
-                run_env.close()
-                x_seq = x_obs[:-1,:]
-                x_next_seq = x_obs[1:,:]
-                train_inputs_i, train_targets_i = self.preprocess_training_data(x_seq, u_seq, x_next_seq)
-                train_inputs.append(train_inputs_i)
-                train_targets.append(train_targets_i)
-            ###########
+                train_inputs = input_data
+                train_targets = target_data
+            # assign all data
+            train_inputs = np.vstack(train_inputs)
+            train_targets = np.vstack(train_targets)
+            self.data_inputs = train_inputs
+            self.data_targets = train_targets
+            train_idx, test_idx = train_test_split(
+                                    #list(range(self.train_iterations + self.validation_iterations)),
+                                    list(range(train_inputs.shape[0])),
+                                    test_size=self.validation_iterations/(self.train_iterations+self.validation_iterations),
+                                    random_state=self.seed
+                                    )
+            train_inputs = self.data_inputs[train_idx, :]
+            train_targets = self.data_targets[train_idx, :]
+            self.train_data = {'train_inputs': train_inputs, 'train_targets': train_targets}
+            test_inputs = self.data_inputs[test_idx, :]
+            test_targets = self.data_targets[test_idx, :]
+            self.test_data = {'test_inputs': test_inputs, 'test_targets': test_targets}
+
+            with open('gp_train_data.npy', 'wb') as f:
+                np.save(f, train_inputs)
+                np.save(f, train_targets)
+                np.save(f, test_inputs)
+                np.save(f, test_targets)
+
         else:
-            train_inputs = input_data
-            train_targets = target_data
-        # assign all data
-        train_inputs = np.vstack(train_inputs)
-        train_targets = np.vstack(train_targets)
-        self.data_inputs = train_inputs
-        self.data_targets = train_targets
-        train_idx, test_idx = train_test_split(
-                                #list(range(self.train_iterations + self.validation_iterations)),
-                                list(range(train_inputs.shape[0])),
-                                test_size=self.validation_iterations/(self.train_iterations+self.validation_iterations),
-                                random_state=self.seed
-                                )
-        train_inputs = self.data_inputs[train_idx, :]
-        train_targets = self.data_targets[train_idx, :]
-        self.train_data = {'train_inputs': train_inputs, 'train_targets': train_targets}
-        test_inputs = self.data_inputs[test_idx, :]
-        test_targets = self.data_targets[test_idx, :]
-        self.test_data = {'test_inputs': test_inputs, 'test_targets': test_targets}
+            with open('gp_train_data.npy', 'rb') as f:
+                train_inputs = np.load(f)
+                train_targets = np.load(f)
+                test_inputs = np.load(f)
+                test_targets = np.load(f)
 
 
         train_inputs_tensor = torch.Tensor(train_inputs).double()
@@ -863,6 +658,8 @@ class FORESEE_CBF_QP(MPC):
         test_inputs_tensor = torch.Tensor(test_inputs).double()
         test_targets_tensor = torch.Tensor(test_targets).double()
 
+
+        plot = False
         if plot:
             init_state = np.array([-1.0, 0.0, 0.0, 0.0, 0.0, 0.0])
             valid_env = self.env_func(init_state=init_state,
@@ -885,6 +682,8 @@ class FORESEE_CBF_QP(MPC):
                                                      target_mask=self.target_mask,
                                                      normalize=self.normalize_training_data
                                                      )
+        # print(f"{len(self.gaussian_process.gp_list)}")
+        # exit()
         if gp_model:
             self.gaussian_process.init_with_hyperparam(train_inputs_tensor,
                                                        train_targets_tensor,
@@ -990,3 +789,20 @@ class FORESEE_CBF_QP(MPC):
         self.x_prev_cov = None
         # self.weights_prev = None
         self.u_prev = None
+
+
+# action = jnp.array([0, 0.2])
+# (Pdb) continue
+# GP SELECT ACTION TIME: 68.7822292369965
+# 0 -th step.
+# action: [0.  0.2]
+# obs: [-9.90075468e-01  3.16756707e-01  4.10690396e-03  1.86162004e-01
+#   8.42593127e-01  5.93979960e+00]
+
+
+
+# GP SELECT ACTION TIME: 29.661592380012735
+# 0 -th step.
+# action: [0.2 0. ]
+# obs: [-1.00992453e+00 -3.16756707e-01  4.10690396e-03  1.86162004e-01
+#  -8.42593127e-01 -5.93979960e+00]

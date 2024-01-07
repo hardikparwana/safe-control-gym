@@ -407,6 +407,8 @@ class FORESEE_GPMPC2(MPC):
         input_constraint_set = []
         for input_constraint in self.constraints.input_constraints:
             input_constraint_set.append(opti.parameter(input_constraint.num_constraints, T))
+
+        pdb.set_trace()
             
         # Sparse GP mean postfactor matrix.
         mean_post_factor = opti.parameter(len(self.target_mask), T)

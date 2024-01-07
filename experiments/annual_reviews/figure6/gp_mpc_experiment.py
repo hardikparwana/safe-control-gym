@@ -43,6 +43,19 @@ def plot_xz_comparison_diag_constraint(prior_run,
     plt.tight_layout()
     plt.savefig(dir+"comparison.png")
 
+    fig2, ax2 = plt.subplots()
+    ax2.plot( run.obs[:,4], 'k*-' )
+
+    fig3, ax3 = plt.subplots()
+    ax3.plot( run.action[:,0], 'r-*', label='T1' )
+    ax3.plot( run.action[:,1], 'b-*', label='T2' )
+    ax3.legend()
+
+    fig4, ax4 = plt.subplots()
+    ax4.plot( run.obs[:,0], 'r-*', label='x' )
+    ax4.plot( run.obs[:,2], 'b-*', label='z' )
+    ax4.legend()
+
 
 def plot_2D_comparison_with_prior(state_inds,
                                   prior_run,
@@ -63,7 +76,7 @@ def plot_2D_comparison_with_prior(state_inds,
             markeredgewidth=2,
             label='Goal')
     final_ind = -1
-    ax.plot(prior_run.obs[:,state_inds[0]], prior_run.obs[:,state_inds[1]], '-', label='Linear MPC')
+    # ax.plot(prior_run.obs[:,state_inds[0]], prior_run.obs[:,state_inds[1]], '-', label='Linear MPC')
     ax.plot(run.obs[:, state_inds[0]], run.obs[:, state_inds[1]], '-', label='GP-MPC')
     # if dir is not None:
     #     np.savetxt(os.path.join(dir, 'goal.csv'), np.array([goal]),  delimiter=',',header='x_goal,y_goal')
@@ -191,7 +204,7 @@ if __name__ == "__main__":
         # Run with the learned gp model.
 
         run_results = ctrl.run(env=test_env,
-                               max_steps=20)  #50)
+                               max_steps=70)  #50)
         ctrl.close()
         # Plot the results.
         prior_run = munch.munchify(prior_results)
