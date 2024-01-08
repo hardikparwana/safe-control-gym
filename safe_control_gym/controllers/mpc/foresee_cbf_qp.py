@@ -130,28 +130,21 @@ class FORESEE_CBF_QP(MPC):
             **kwargs)
         
         # Setup controller parameters
-        # kx = 1.0
-        # kv = 1.0
-        # kRx = 1.0
-        # kRv = 1.0
+        kx = 0.09 #0.2 #0.1 #0.5 # Attarction
+        kv = 0.05 #0.20000002#  0.3 # Attraction
+        krx = 0.8 # Repulsion
+        kR = 60.0
+        kRv = 10.0
+        # krv = 1.0 # Repulsion
         # kT1x = -0.2
         # kT1y = 0.2
         # kT10 = 5.0
         # kT2x = 0.2
         # kT2y = 1.0
         # kT20 = 5.0
+     
 
-        kx = 0.2 #0.2 #0.1 #0.5 # Attarction
-        kv = 1.5 #0.20000002#  0.3 # Attraction
-        kRx = 1.0 # Repulsion
-        kRv = 1.0 # Repulsion
-        kT1x = -0.2
-        kT1y = 0.2
-        kT10 = 5.0
-        kT2x = 0.2
-        kT2y = 1.0
-        kT20 = 5.0
-        self.params = jnp.array([ kx, kv, kRx, kRv, kT1x, kT1y, kT10, kT2x, kT2y, kT20 ])
+        self.params = jnp.array([ kx, kv, krx, kR, kRv ])
 
 
         # Setup environments.
@@ -374,37 +367,25 @@ class FORESEE_CBF_QP(MPC):
         return state_constraint_set, input_constraint_set
 
     @staticmethod
-    def controller(params, X, x_goal, A, b):
+    def controller(params, X, x_goal, A, bc):
 
             p = jnp.array([ X[0,0], X[2,0] ]).reshape(-1,1)
             pdot = jnp.array([ X[1,0], X[3,0] ]).reshape(-1,1)
 
-            kx = 0.09 #params[0]
-            kv = 0.05 #params[1]
-            kRx = params[2]
-            kRv = params[3]
-            kT1x = params[4]
-            kT1y = params[5]
-            kT10 = params[6]
-            kT2x = params[7]
-            kT2y = params[8]
-            kT20 = params[9]
-            kR = 60.0 #0.1
-            kRv = 10.0 #0.05 #0.01
+            kx = params[0]
+            kv = params[1]
+            krx = params[2]
+            kR = params[3] 
+            kRv = params[4]
             
-            # attraction
-            # print(f"p: {p}, goal: {x_goal}")
-            # vd = - kx * jnp.clip((p - jnp.array([x_goal[0,0], x_goal[2,0]]).reshape(-1,1) ), -1.0, 1.0)
-            # vd = - kx * jnp.clip( p - jnp.array([-1.0, 0.5]).reshape(-1,1), -1.0, 1.0 )
-            # ad_attraction = - kv * (pdot - vd)
-            
+            # attraction           
             ad_attraction = - kx * (p - jnp.array([x_goal[0,0], x_goal[2,0]]).reshape(-1,1)) - kv * pdot 
 
             # Repulsion
-            # print(f"A: {A}, b:{b}")
-            vd_repulsion = - kRx * jnp.array([A[0,0], A[0,2]]).reshape(-1,1)  * 1.0 / ( b.reshape(-1,1) - A @ X )
-            ad_repulsion = jnp.zeros((2,1)) #kRv * ( pdot - vd_repulsion )
-
+            Ac = jnp.array([A[0,0], A[0,2]]).reshape(-1,1)
+            Ac = Ac / jnp.linalg.norm(Ac) # -Ac is the direction of improving gradient
+            ad_repulsion = - krx * Ac  * 1.0 * jnp.tanh( 0.01 / (bc.reshape(-1,1) - A @ X)  ) 
+            # pdb.set_trace()
             #Based on perfect knowledge of dynamics
             M = 0.027  #0.027 # 1.0
             I = 1.4e-5  #0.5
@@ -417,8 +398,6 @@ class FORESEE_CBF_QP(MPC):
             theta_d = jnp.arctan2( target_thrust[0,0], target_thrust[1,0] )
 
             
-
-
             scalar_thrust = target_thrust.T @ jnp.array([ jnp.sin(X[4,0]), jnp.cos(X[4,0]) ])
             theta_ddot = - kR * (X[4,0]-theta_d) - kRv * X[5,0]
             moment = I * theta_ddot
@@ -428,10 +407,6 @@ class FORESEE_CBF_QP(MPC):
             T2 = 0.5 * ( scalar_thrust + moment / L )
             T1 = 0.5 * ( scalar_thrust - moment / L )
             
-
-            # T1 = 0.5 * ( ad.T @ jnp.array([jnp.sin(X[4,0]), jnp.cos(X[4,0])]).reshape(-1,1) + M*g*jnp.cos(X[4,0]) + (kR * jnp.clip((X[4,0]-theta_d), -jnp.pi/12, jnp.pi/12) / L * jnp.sqrt(2) ) ) #+ I * X[5,0]**2)/L )
-            # T2 = 0.5 * ( ad.T @ jnp.array([jnp.sin(X[4,0]), jnp.cos(X[4,0])]).reshape(-1,1) + M*g*jnp.cos(X[4,0]) + ( - kR * jnp.clip((X[4,0]-theta_d), -jnp.pi/12, jnp.pi/12) / L * jnp.sqrt(2) ) ) #- I * X[5,0]**2)/L )
-
             # pdb.set_trace()
             action = jnp.array([T1[0], T2[0]])
 
@@ -441,10 +416,7 @@ class FORESEE_CBF_QP(MPC):
             # action = 0.2 * jnp.tanh(action)
 
             print(f"theta: {X[4,0]}, thetad: {theta_d}")
-            # print(f"action: {action}, a: {ad}, att: {ad_attraction}, rep: {ad_repulsion}")
 
-            # pdb.set_trace()
-            # action = jnp.array([0.3, 1.0])
             return action
        
     def setup_predict(self, T): #, X, T, A, B, x_eq, u_eq):
