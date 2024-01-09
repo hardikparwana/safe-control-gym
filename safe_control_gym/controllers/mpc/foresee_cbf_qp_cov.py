@@ -39,16 +39,17 @@ from safe_control_gym.controllers.mpc.gp_utils import GaussianProcessCollection,
 from safe_control_gym.envs.benchmark_env import Task
 
 # New
-from safe_control_gym.controllers.mpc.foresee_utils import *
+from safe_control_gym.controllers.mpc.foresee_utils_jax import *
 import pdb
 
-class FORESEE_CBF_QP(MPC):
+class FORESEE_CBF_QP_COV(MPC):
     """MPC with Gaussian Process as dynamics residual and FORESEE for uncertainty propagation. 
 
     """
     predict = []
     predict_grad = []
     reward_func = []
+    sigma_point_expand = []
 
     def __init__(
             self,
@@ -130,9 +131,9 @@ class FORESEE_CBF_QP(MPC):
             **kwargs)
         
         # Setup controller parameters
-        kx = 0.09 #0.09 ##0.06 #0.09 #0.2 #0.1 #0.5 # Attarction
-        kv = 0.1 #0.05 #0.1 #0.05 #0.20000002#  0.3 # Attraction
-        krx = 0.03 #0.4 #0.4 #0.8 # Repulsion
+        kx = 0.09 #0.06 #0.09 #0.2 #0.1 #0.5 # Attarction
+        kv = 0.05 #0.1 #0.05 #0.20000002#  0.3 # Attraction
+        krx = 0.4 #0.4 #0.8 # Repulsion
         kR = 60.0
         kRv = 10.0
         # krv = 1.0 # Repulsion
@@ -143,7 +144,7 @@ class FORESEE_CBF_QP(MPC):
         # kT2y = 1.0
         # kT20 = 5.0
      
-        self.adapt = False #True
+        self.adapt = True
         self.num_adapt_iterations = 10
 
         self.params = np.array([ kx, kv, krx, kR, kRv ])
@@ -213,37 +214,6 @@ class FORESEE_CBF_QP(MPC):
         # Compute the probabilistic constraint inverse CDF according to section III.D.b in Hewing 2019.
         self.inverse_cdf = scipy.stats.norm.ppf(1 - (1/self.model.nx - (self.prob + 1)/(2*self.model.nx)))
         # self.create_sparse_GP_machinery()
-
-    # def create_sparse_GP_machinery(self):
-    #     """This setups the gaussian process approximations for FITC formulation.
-
-    #     """
-    #     lengthscales, signal_var, noise_var, gp_K_plus_noise = self.gaussian_process.get_hyperparameters(as_numpy=True)
-    #     self.length_scales = lengthscales.squeeze()
-    #     self.signal_var = signal_var.squeeze()
-    #     self.noise_var = noise_var.squeeze()
-    #     self.gp_K_plus_noise = gp_K_plus_noise
-    #     Nx = len(self.input_mask)
-    #     Ny = len(self.target_mask)
-    #     N = self.gaussian_process.n_training_samples
-    #     # Create CasADI function for computing the kernel K_z_zind with parameters for z, z_ind, length scales and signal variance.
-    #     # We need the CasADI version of this so that it can by symbolically differentiated in in the MPC optimization.
-    #     z1 = cs.SX.sym('z1', Nx)
-    #     z2 = cs.SX.sym('z2', Nx)
-    #     ell_s = cs.SX.sym('ell', Nx)
-    #     sf2_s = cs.SX.sym('sf2')
-    #     z_ind  = cs.SX.sym('z_ind', self.T, Nx)
-    #     covSE = cs.Function('covSE', [z1, z2, ell_s, sf2_s],
-    #                         [covSEard(z1, z2, ell_s, sf2_s)])
-    #     ks = cs.SX.zeros(1, self.T)
-    #     for i in range(self.T):
-    #         ks[i] = covSE(z1, z_ind[i, :], ell_s, sf2_s)
-    #     ks_func = cs.Function('K_s', [z1, z_ind, ell_s, sf2_s], [ks])
-    #     K_z_zind = cs.SX.zeros(Ny, self.T)
-    #     for i in range(Ny):
-    #         K_z_zind[i,:] = ks_func(z1, z_ind, self.length_scales[i,:], self.signal_var[i])
-    #     # This will be mulitplied by the mean_post_factor computed at every time step to compute the approximate mean.
-    #     self.K_z_zind_func = cs.Function('K_z_zind', [z1, z_ind],[K_z_zind],['z1', 'z2'],['K'])
 
     def preprocess_training_data(self,
                                  x_seq,
@@ -410,6 +380,7 @@ class FORESEE_CBF_QP(MPC):
             T1 = 0.5 * ( scalar_thrust - moment / L )
             
             # pdb.set_trace()
+            action = jnp.array([T1[0], T2[0]])
             action = jnp.clip( jnp.array( [T1[0], T2[0]] ), 0, 0.2)
 
             # action = jnp.clip(action, 0.0, None )
@@ -420,6 +391,35 @@ class FORESEE_CBF_QP(MPC):
             # print(f"theta: {X[4,0]}, thetad: {theta_d}")
 
             return action
+
+    def setup_sigma_point_expand(self):
+        dt = self.dt
+        n, N = 6, 13
+
+        @jit
+        def sigma_point_expand(sigma_points, weights, params, A, B, x_eq, u_eq, X_GOAL, consA, consb):
+
+            new_points = jnp.zeros((n*(2*n+1),N))
+            new_weights = jnp.zeros((2*n+1,N))
+
+            def body(i, inputs):
+                new_points, new_weights = inputs        
+                u = FORESEE_CBF_QP_COV.controller(params, sigma_points[:,i].reshape(-1,1), X_GOAL, consA, consb).reshape(-1,1)
+                z = jnp.append( sigma_points[:,i].reshape(-1,1), u, axis=0 )
+                pred_mu, next_state_cov = self.gaussian_process.jax_predict(z=z)
+                next_state_cov_root = jnp.zeros((6,6)) #get_ut_cov_root_diagonal(next_state_cov)    
+                next_state_mu = (A @ (sigma_points[:,i].reshape(-1,1) - x_eq) + B @ (u - u_eq))*dt + x_eq + pred_mu                       
+                temp_points, temp_weights = generate_sigma_points_gaussian( next_state_mu, next_state_cov_root, jnp.zeros((n,1)), 1.0 )
+                new_points = new_points.at[:,i].set( temp_points.reshape(-1,1, order='F')[:,0] )
+                new_weights = new_weights.at[:,i].set( temp_weights.reshape(-1,1, order='F')[:,0] * weights[:,i] )   
+                return new_points, new_weights
+            return_points, return_weights = lax.fori_loop(0, N, body, (new_points, new_weights))
+
+            # because return points are all new sigma points of a point in single column. required because JAX inplace operator requires index start/end/gap to be the same
+            return return_points.reshape((n, N*(2*n+1)), order='F'), return_weights.reshape((1,N*(2*n+1)), order='F')
+        
+        return sigma_point_expand
+
        
     def setup_predict(self, T): #, X, T, A, B, x_eq, u_eq):
             
@@ -427,30 +427,19 @@ class FORESEE_CBF_QP(MPC):
 
             @jit
             def predict_future(params, X, A, B, x_eq, u_eq, X_GOAL, consA, consb):             
-                states = jnp.zeros((6, T+1))
-                states = states.at[:,0].set( X[:,0] )
-                actions = jnp.zeros((2, T))
-                # for i in range(T):
-                #     u = FORESEE_CBF_QP.controller(params, states[:,i].reshape(-1,1), X_GOAL, consA, consb).reshape(-1,1)
-                #     z = jnp.append( states[:,i].reshape(-1,1), u, axis=0 )
-                #     pred_mu, pred_cov = self.gaussian_process.jax_predict(z=z)
-                #     next_state = A @ (states[:,i].reshape(-1,1) - x_eq) + B @ (u - u_eq) + x_eq + pred_mu
-                #     states = states.at[:,i+1].set( next_state[:,0 ] )
-                #     # pdb.set_trace()
-                #     actions = actions.at[:,i].set( u[:,0] )
-                # return states, actions        
-            
-
+                sigma_points, weights = generate_sigma_points_gaussian( X, jnp.zeros((6,6)), jnp.zeros((6,1)), 1.0 )   
+                mus = jnp.zeros((6, T+1))
+                covs = jnp.zeros((6,T+1))         
                 def body(i, inputs):
-                    states, actions = inputs
-                    u = FORESEE_CBF_QP.controller(params, states[:,i].reshape(-1,1), X_GOAL, consA, consb).reshape(-1,1)
-                    z = jnp.append( states[:,i].reshape(-1,1), u, axis=0 )
-                    pred_mu, pred_cov = self.gaussian_process.jax_predict(z=z)
-                    next_state = (A @ (states[:,i].reshape(-1,1) - x_eq) + B @ (u - u_eq))*dt + x_eq + pred_mu
-                    states = states.at[:,i+1].set( next_state[:,0 ] )
-                    actions = actions.at[:,i].set( u[:,0] )
-                    return states, actions        
-                return lax.fori_loop( 0, T, body, (states, actions))
+                    sigma_points, weights, mus, covs = inputs
+                    expanded_sigma_points, expanded_weights = FORESEE_CBF_QP_COV.sigma_point_expand( sigma_points, weights, params, A, B, x_eq, u_eq, X_GOAL, consA, consb )
+                    mu, cov, sigma_points, weights = sigma_point_compress( expanded_sigma_points, expanded_weights )
+                    get_mean_cov(sigma_points, weights)
+                    mus = mus.at[:,i+1].set( mu[:,0] )
+                    covs = covs.at[:,i+1].set( jnp.diag(cov) )
+                    return sigma_points, weights, mus, covs        
+                mus, covs, final_points, final_weights = lax.fori_loop( 0, T, body, (sigma_points, weights, mus, covs))
+                return mus, covs
             return predict_future
     
     @staticmethod
@@ -469,12 +458,12 @@ class FORESEE_CBF_QP(MPC):
         """Sets up nonlinear optimization problem including cost objective, variable bounds and dynamics constraints.
 
         """
+        FORESEE_CBF_QP_COV.sigma_point_expand = self.setup_sigma_point_expand()
+        FORESEE_CBF_QP_COV.predict = self.setup_predict(5)#self.T)
 
-        FORESEE_CBF_QP.predict = self.setup_predict(70)#self.T)
+        FORESEE_CBF_QP_COV.reward_func = lambda params, X, A, B, x_eq, u_eq, X_GOAL, consA, consb: FORESEE_CBF_QP_COV.reward( FORESEE_CBF_QP_COV.predict(params, X, A, B, x_eq, u_eq, X_GOAL, consA, consb)[0], X_GOAL )
 
-        FORESEE_CBF_QP.reward_func = lambda params, X, A, B, x_eq, u_eq, X_GOAL, consA, consb: FORESEE_CBF_QP.reward( FORESEE_CBF_QP.predict(params, X, A, B, x_eq, u_eq, X_GOAL, consA, consb)[0], X_GOAL )
-
-        FORESEE_CBF_QP.predict_grad = jit( value_and_grad( FORESEE_CBF_QP.reward_func, 0 ) )
+        FORESEE_CBF_QP_COV.predict_grad = jit( value_and_grad( FORESEE_CBF_QP_COV.reward_func, 0 ) )
         return
 
         ########################################################
@@ -499,7 +488,7 @@ class FORESEE_CBF_QP(MPC):
         # Select current action
         z = jnp.append( obs.reshape(-1,1), jnp.zeros((2,1)), axis=0 )
         self.gaussian_process.jax_predict(z=z)     
-        action = FORESEE_CBF_QP.controller(self.params, obs.reshape(-1,1), x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
+        action = FORESEE_CBF_QP_COV.controller(self.params, obs.reshape(-1,1), x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
         
         
         # Update parameters
@@ -513,20 +502,17 @@ class FORESEE_CBF_QP(MPC):
         # print(f"A; {A} \n B:{B}, \n x_eq: {x_eq}, \n u_eq: {u_eq}")
         # exit()
         
-        reward, grads = FORESEE_CBF_QP.predict_grad( jnp.copy(self.params), obs.reshape(-1,1), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b )
+        reward, grads = FORESEE_CBF_QP_COV.predict_grad( jnp.copy(self.params), obs.reshape(-1,1), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b )
         print(f"rewards: {reward}, gras:{grads}")
-
-
-        
 
         t0 = time.time()
         
         if self.adapt:
             print(f"HELLOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO")
             for i in range(self.num_adapt_iterations):
-                states, actions = FORESEE_CBF_QP.predict(jnp.copy(self.params), obs.reshape(-1,1), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
-                reward, grads = FORESEE_CBF_QP.predict_grad( jnp.copy(self.params), obs.reshape(-1,1), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b )
-                print(f"reward: {reward}, grad: {grads}")
+                states, actions = FORESEE_CBF_QP_COV.predict(jnp.copy(self.params), obs.reshape(-1,1), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
+                reward, grads = FORESEE_CBF_QP_COV.predict_grad( jnp.copy(self.params), obs.reshape(-1,1), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b )
+                # print(f"reward: {reward}, grad: {grads}")
                 # exit()
                 # pdb.set_trace()
                 grads = np.asarray(grads)

@@ -364,7 +364,7 @@ class GaussianProcessCollection:
         @jit
         def body(z):
             means = jnp.zeros((6,1))
-            covs = jnp.zeros((6,4))
+            covs = jnp.zeros((6,6))
 
             for gp_ind, gp in enumerate(self.gp_list):            
                 pred_mu, pred_cov = gp.jax_predict(z=z)

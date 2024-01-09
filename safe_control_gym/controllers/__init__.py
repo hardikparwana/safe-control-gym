@@ -43,6 +43,10 @@ register(id="foresee_cbf_qp",
          entry_point="safe_control_gym.controllers.mpc.foresee_cbf_qp:FORESEE_CBF_QP",
          config_entry_point="safe_control_gym.controllers.mpc:gp_mpc.yaml")
 
+register(id="foresee_cbf_qp_cov",
+         entry_point="safe_control_gym.controllers.mpc.foresee_cbf_qp_cov:FORESEE_CBF_QP_COV",
+         config_entry_point="safe_control_gym.controllers.mpc:gp_mpc.yaml")
+
 register(id="mpsc",
          entry_point="safe_control_gym.controllers.mpsc.mpsc:MPSC",
          config_entry_point="safe_control_gym.controllers.mpsc:mpsc.yaml")
