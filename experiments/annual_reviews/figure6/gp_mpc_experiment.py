@@ -16,6 +16,18 @@ from functools import partial
 from safe_control_gym.utils.registration import make
 from safe_control_gym.utils.configuration import ConfigFactory
 
+import jax.numpy as jnp
+
+import pdb
+
+def reward(Xs, x_goal):
+    scale = 0.00001
+    pos_error = 20 * ( jnp.sum( jnp.square(scale * (Xs[0,:]-x_goal[0,0]) ) ) + jnp.sum( jnp.square(scale * (Xs[2,:]-x_goal[2,0]) ) ) )
+    pos_error_terminal = 80 * ( jnp.sum( jnp.square(scale * (Xs[0,-1]-x_goal[0,0]))  ) + jnp.sum( jnp.square(scale * (Xs[2,-1]-x_goal[1,0]) ) ) )
+    vel_error = 2 * ( jnp.sum( jnp.square( scale * Xs[1,:]) ) + jnp.sum( jnp.square(scale * Xs[2,:]) ) )
+    # theta_error = 1 * jnp.sum( jnp.square(scale * (Xs[4,:]-x_goal[4,0]) ) )
+    return pos_error + vel_error  + pos_error_terminal #+ theta_error
+
 
 def plot_xz_comparison_diag_constraint(prior_run,
                                        run,
@@ -43,8 +55,12 @@ def plot_xz_comparison_diag_constraint(prior_run,
     plt.tight_layout()
     plt.savefig(dir+"comparison.png")
 
+    x_goal = jnp.array([-0.7, 0.5]).reshape(-1,1)
+    rewards = reward( run.obs.T, x_goal )
+
     fig2, ax2 = plt.subplots()
-    ax2.plot( run.obs[:,4], 'k*-' )
+    ax2.plot( run.obs[:,4], 'k*-', label=r'$\theta$' )
+    ax2.legend()
 
     fig3, ax3 = plt.subplots()
     ax3.plot( run.action[:,0], 'r-*', label='T1' )
@@ -55,6 +71,19 @@ def plot_xz_comparison_diag_constraint(prior_run,
     ax4.plot( run.obs[:,0], 'r-*', label='x' )
     ax4.plot( run.obs[:,2], 'b-*', label='z' )
     ax4.legend()
+
+    # pdb.set_trace()
+    fig5, ax5 = plt.subplots()
+    ax5.plot( run.params[:,0], 'r-*', label='kx' )
+    ax5.plot( run.params[:,1], 'b-*', label='kv' )
+    ax5.plot( run.params[:,2], 'c-*', label='krx' )
+    # ax5.plot( run.params[:,3], 'm-*', label='kR' )
+    # ax5.plot( run.params[:,4], 'k-*', label='kRv' )
+    ax5.legend()
+
+    fig6, ax6 = plt.subplots()
+    ax6.plot( rewards, 'r-*', label='reward' )
+    ax6.legend()
 
 
 def plot_2D_comparison_with_prior(state_inds,
@@ -204,7 +233,7 @@ if __name__ == "__main__":
         # Run with the learned gp model.
 
         run_results = ctrl.run(env=test_env,
-                               max_steps=70)  #50)
+                               max_steps=150)  #50)
         ctrl.close()
         # Plot the results.
         prior_run = munch.munchify(prior_results)

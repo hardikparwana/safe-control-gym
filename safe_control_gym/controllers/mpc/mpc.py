@@ -287,7 +287,8 @@ class MPC(BaseController):
                               'info': [],
                               'action': [],
                               'horizon_inputs': [],
-                              'horizon_states': []
+                              'horizon_states': [],
+                              'params': []
         }
 
     def run(self,
@@ -326,17 +327,20 @@ class MPC(BaseController):
             raise("Undefined Task")
         self.terminate_loop = False
         while np.linalg.norm(obs - env.X_GOAL) > 1e-3 and i < MAX_STEPS and not(self.terminate_loop):
-            action = self.select_action(obs)
+            action, params = self.select_action(obs)
+            # action = self.select_action(obs)
             if self.terminate_loop:
                 print("Infeasible MPC Problem")
                 break
             # Repeat input for more efficient control.
+            # pdb.set_trace()
             obs, reward, done, info = env.step(action)
             self.results_dict['obs'].append(obs)
             self.results_dict['reward'].append(reward)
             self.results_dict['done'].append(done)
             self.results_dict['info'].append(info)
             self.results_dict['action'].append(action)
+            self.results_dict['params'].append(params)
             print(i, '-th step.')
             print(f"action: {action}")
             print(f"obs: {obs}")
@@ -358,6 +362,7 @@ class MPC(BaseController):
                 ep_lengths.mean(), ep_lengths.std(), ep_returns.mean(),
                 ep_returns.std())
         self.results_dict['obs'] = np.vstack(self.results_dict['obs'])
+        self.results_dict['params'] = np.vstack(self.results_dict['params'])
         try:
             self.results_dict['reward'] = np.vstack(self.results_dict['reward'])
             self.results_dict['action'] = np.vstack(self.results_dict['action'])

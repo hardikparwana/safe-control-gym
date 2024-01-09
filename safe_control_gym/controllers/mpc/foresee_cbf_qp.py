@@ -130,9 +130,9 @@ class FORESEE_CBF_QP(MPC):
             **kwargs)
         
         # Setup controller parameters
-        kx = 0.09 #0.2 #0.1 #0.5 # Attarction
-        kv = 0.05 #0.20000002#  0.3 # Attraction
-        krx = 0.8 # Repulsion
+        kx = 0.09 #0.06 #0.09 #0.2 #0.1 #0.5 # Attarction
+        kv = 0.05 #0.1 #0.05 #0.20000002#  0.3 # Attraction
+        krx = 0 #0.4 #0.8 # Repulsion
         kR = 60.0
         kRv = 10.0
         # krv = 1.0 # Repulsion
@@ -144,7 +144,7 @@ class FORESEE_CBF_QP(MPC):
         # kT20 = 5.0
      
 
-        self.params = jnp.array([ kx, kv, krx, kR, kRv ])
+        self.params = np.array([ kx, kv, krx, kR, kRv ])
 
 
         # Setup environments.
@@ -415,18 +415,19 @@ class FORESEE_CBF_QP(MPC):
             # print(f"action: {action}")
             # action = 0.2 * jnp.tanh(action)
 
-            print(f"theta: {X[4,0]}, thetad: {theta_d}")
+            # print(f"theta: {X[4,0]}, thetad: {theta_d}")
 
             return action
        
     def setup_predict(self, T): #, X, T, A, B, x_eq, u_eq):
+            
+            dt = self.dt
 
-            # @jit
+            @jit
             def predict_future(params, X, A, B, x_eq, u_eq, X_GOAL, consA, consb):             
                 states = jnp.zeros((6, T+1))
                 states = states.at[:,0].set( X[:,0] )
                 actions = jnp.zeros((2, T))
-
                 # for i in range(T):
                 #     u = FORESEE_CBF_QP.controller(params, states[:,i].reshape(-1,1), X_GOAL, consA, consb).reshape(-1,1)
                 #     z = jnp.append( states[:,i].reshape(-1,1), u, axis=0 )
@@ -443,7 +444,7 @@ class FORESEE_CBF_QP(MPC):
                     u = FORESEE_CBF_QP.controller(params, states[:,i].reshape(-1,1), X_GOAL, consA, consb).reshape(-1,1)
                     z = jnp.append( states[:,i].reshape(-1,1), u, axis=0 )
                     pred_mu, pred_cov = self.gaussian_process.jax_predict(z=z)
-                    next_state = A @ (states[:,i].reshape(-1,1) - x_eq) + B @ (u - u_eq) + x_eq + pred_mu
+                    next_state = (A @ (states[:,i].reshape(-1,1) - x_eq) + B @ (u - u_eq))*dt + x_eq  + dt + pred_mu
                     states = states.at[:,i+1].set( next_state[:,0 ] )
                     actions = actions.at[:,i].set( u[:,0] )
                     return states, actions        
@@ -452,8 +453,13 @@ class FORESEE_CBF_QP(MPC):
     
     @staticmethod
     def reward(Xs, x_goal):
-        # return jnp.sum( jnp.square(Xs[0,:]-x_goal[0,0]) )
-        return jnp.sum( jnp.square(Xs[2,-1]-x_goal[2,0]) ) #+ jnp.sum( jnp.square(Xs[0,-1]-x_goal[0,0]) )
+        scale = 1.0
+        pos_error = 2 * ( jnp.sum( jnp.square(scale * (Xs[0,:]-x_goal[0,0]) ) ) + jnp.sum( jnp.square(scale * (Xs[2,:]-x_goal[1,0]) ) ) )
+        pos_error_terminal = 8 * ( jnp.sum( jnp.square(scale * (Xs[0,-1]-x_goal[0,0]))  ) + jnp.sum( jnp.square(scale * (Xs[2,-1]-x_goal[1,0]) ) ) )
+        vel_error = 3000 * ( jnp.sum( jnp.square( scale * Xs[1,:]) ) + jnp.sum( jnp.square(scale * Xs[2,:]) ) )
+        # theta_error = 1 * jnp.sum( jnp.square(scale * (Xs[4,:]-x_goal[4,0]) ) )
+        return pos_error + vel_error  + pos_error_terminal #+ theta_error
+        
 
 
 
@@ -462,7 +468,7 @@ class FORESEE_CBF_QP(MPC):
 
         """
 
-        FORESEE_CBF_QP.predict = self.setup_predict(8)#self.T)
+        FORESEE_CBF_QP.predict = self.setup_predict(70)#self.T)
 
         FORESEE_CBF_QP.reward_func = lambda params, X, A, B, x_eq, u_eq, X_GOAL, consA, consb: FORESEE_CBF_QP.reward( FORESEE_CBF_QP.predict(params, X, A, B, x_eq, u_eq, X_GOAL, consA, consb)[0], X_GOAL )
 
@@ -487,11 +493,13 @@ class FORESEE_CBF_QP(MPC):
          """
         
         print(f"time step: {self.dt}")
+        x_goal = self.env.X_GOAL.reshape(-1,1) #jnp.array([-1.0, 0.0]).reshape(-1,1)  #jnp.array([-0.7, 0.5]).reshape(-1,1)  # 
         # Select current action
         z = jnp.append( obs.reshape(-1,1), jnp.zeros((2,1)), axis=0 )
         self.gaussian_process.jax_predict(z=z)     
-        action = FORESEE_CBF_QP.controller(self.params, obs.reshape(-1,1), self.env.X_GOAL.reshape(-1,1), self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
-
+        action = FORESEE_CBF_QP.controller(self.params, obs.reshape(-1,1), x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
+        
+        
         # Update parameters
         nx, nu = self.model.nx, self.model.nu
         T = self.T
@@ -500,21 +508,35 @@ class FORESEE_CBF_QP(MPC):
         x_eq = self.prior_ctrl.X_LIN[:,None].reshape(-1,1)
         u_eq = self.prior_ctrl.U_LIN[:,None].reshape(-1,1)
 
+        # print(f"A; {A} \n B:{B}, \n x_eq: {x_eq}, \n u_eq: {u_eq}")
+        # exit()
+        
+        reward, grads = FORESEE_CBF_QP.predict_grad( jnp.copy(self.params), obs.reshape(-1,1), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b )
+        print(f"rewards: {reward}, gras:{grads}")
+
+
+        
+
         t0 = time.time()
         
 
-        # num_iterations = 1
-        # print(f"HELLOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO")
-        # for i in range(num_iterations):
-        #     states, actions = FORESEE_CBF_QP.predict(self.params, obs.reshape(-1,1), A, B, x_eq, u_eq, self.env.X_GOAL.reshape(-1,1), self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
-        #     reward, grads = FORESEE_CBF_QP.predict_grad( jnp.copy(self.params), obs.reshape(-1,1), A, B, x_eq, u_eq, self.env.X_GOAL.reshape(-1,1), self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b )
-        #     # print(f"reward: {reward}, grad: {grads}")
-        #     pdb.set_trace()
-        #     self.params = self.params - 0.1 * jnp.clip( grads, -1.0, 1.0 )
-        # print(f"************************************************* time: {time.time()-t0} *********************************************")
-        # print(f"*************** params: {self.params}")
+        num_iterations = 10
+        print(f"HELLOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO")
+        for i in range(num_iterations):
+            states, actions = FORESEE_CBF_QP.predict(jnp.copy(self.params), obs.reshape(-1,1), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
+            reward, grads = FORESEE_CBF_QP.predict_grad( jnp.copy(self.params), obs.reshape(-1,1), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b )
+            print(f"reward: {reward}, grad: {grads}")
+            # exit()
+            # pdb.set_trace()
+            grads = np.asarray(grads)
+            lr = 0.0001 # unstable with 0.001. need atleast 0.0001
+            self.params[0] = np.clip( self.params[0] - lr * np.clip( grads[0], -1.0, 1.0 ), 0.0, None )
+            self.params[1] = np.clip( self.params[1] - lr * np.clip( grads[1], -1.0, 1.0 ), 0.0, None )
+            # self.params[2] = np.clip( self.params[2] - 0.001 * np.clip( grads[2], -1.0, 1.0 ), 0.0, None )
+        print(f"************************************************* time: {time.time()-t0} *********************************************")
+        print(f"*************** params: {self.params}")
         
-        return action         
+        return action, jnp.copy(self.params)         
 
     def learn(self,
               input_data=None,
@@ -710,12 +732,12 @@ class FORESEE_CBF_QP(MPC):
                 print("[ERROR]: Not yet supported.")
                 exit()
             t1 = time.perf_counter()
-            action = self.select_action_with_gp(obs)
+            action, params = self.select_action_with_gp(obs)
             t2 = time.perf_counter()
             print("GP SELECT ACTION TIME: %s" %(t2 - t1))
             self.last_obs = obs
             self.last_action = action
-        return action
+        return action, params
 
     def close(self):
         """Clean up.

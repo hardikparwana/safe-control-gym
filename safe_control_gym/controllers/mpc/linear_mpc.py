@@ -195,7 +195,7 @@ class LinearMPC(MPC):
             return_status = opti.return_status()
             if return_status == 'unknown':
                 self.terminate_loop = True
-                return None
+                return None, np.zeros(5)
             elif return_status == 'Maximum_Iterations_Exceeded':
                 self.terminate_loop = True
                 u_val = opti.debug.value(u_var)
@@ -206,4 +206,4 @@ class LinearMPC(MPC):
             action = np.array([u_val[0]])
         action += self.U_LIN
         self.prev_action = action
-        return action
+        return action, np.zeros(5)
