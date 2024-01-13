@@ -1,7 +1,7 @@
 output_dir: temp-data/figure6
 algo_config:
   seed: 5309287 #6314
-  horizon: 15
+  horizon: 4
   r_mpc:
     - 0.1
     - 0.1

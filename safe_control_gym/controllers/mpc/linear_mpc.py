@@ -15,6 +15,7 @@ from copy import deepcopy
 from safe_control_gym.controllers.mpc.mpc import MPC
 from safe_control_gym.envs.benchmark_env import Task
 
+import pdb
 
 class LinearMPC(MPC):
     """ Simple linear MPC.
@@ -90,6 +91,7 @@ class LinearMPC(MPC):
         """
         nx, nu = self.model.nx, self.model.nu
         T = self.T
+
         # Define optimizer and variables.
         opti = cs.Opti()
         # States.

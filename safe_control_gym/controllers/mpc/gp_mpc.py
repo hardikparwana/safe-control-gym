@@ -405,7 +405,7 @@ class GPMPC(MPC):
             for u_i, input_constraint in enumerate(self.input_constraints_sym):
                 opti.subject_to(input_constraint(u_var[:, i]) <= input_constraint_set[u_i][:,i])
 
-        pdb.set_trace()
+        # pdb.set_trace()
         # Final state constraints.
         for s_i, state_constraint in enumerate(self.state_constraints_sym):
             opti.subject_to(state_constraint(x_var[:, -1]) <= state_constraint_set[s_i][:,-1])
@@ -515,7 +515,7 @@ class GPMPC(MPC):
         else:
             action = np.array([u_val[0]])
         self.prev_action = action,
-        pdb.set_trace()
+        # pdb.set_trace()
         return action
 
     def learn(self,
@@ -698,7 +698,7 @@ class GPMPC(MPC):
             print("GP SELECT ACTION TIME: %s" %(t2 - t1))
             self.last_obs = obs
             self.last_action = action
-        return action
+        return action, np.zeros(5)
 
     def close(self):
         """Clean up.

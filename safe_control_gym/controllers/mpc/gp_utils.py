@@ -14,6 +14,9 @@ from jax import jit, lax
 
 from safe_control_gym.utils.utils import mkdirs
 
+from jax import config
+config.update("jax_enable_x64", True)
+
 
 def covSEard(x,
              z,

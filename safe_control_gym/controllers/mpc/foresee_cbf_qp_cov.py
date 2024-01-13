@@ -27,6 +27,7 @@ import gpytorch
 import jax
 import jax.numpy as jnp
 from jax import jit, lax, grad, value_and_grad
+import cvxpy as cp
 
 from copy import deepcopy
 from skopt.sampler import Lhs
@@ -41,6 +42,8 @@ from safe_control_gym.envs.benchmark_env import Task
 # New
 from safe_control_gym.controllers.mpc.foresee_utils_jax import *
 import pdb
+from jax import config
+config.update("jax_enable_x64", True)
 
 class FORESEE_CBF_QP_COV(MPC):
     """MPC with Gaussian Process as dynamics residual and FORESEE for uncertainty propagation. 
@@ -50,6 +53,7 @@ class FORESEE_CBF_QP_COV(MPC):
     predict_grad = []
     reward_func = []
     sigma_point_expand = []
+    constraint_func = []
 
     def __init__(
             self,
@@ -149,6 +153,13 @@ class FORESEE_CBF_QP_COV(MPC):
 
         self.params = np.array([ kx, kv, krx, kR, kRv ])
 
+        self.co  = None
+        self.cQ = None
+        self.cG = None
+        self.cA = None
+        self.cb = None
+        self.prob = None
+
 
         # Setup environments.
         self.env_func = env_func
@@ -215,129 +226,6 @@ class FORESEE_CBF_QP_COV(MPC):
         self.inverse_cdf = scipy.stats.norm.ppf(1 - (1/self.model.nx - (self.prob + 1)/(2*self.model.nx)))
         # self.create_sparse_GP_machinery()
 
-    def preprocess_training_data(self,
-                                 x_seq,
-                                 u_seq,
-                                 x_next_seq
-                                 ):
-        """Converts trajectory data for GP trianing.
-        
-        Args:
-            x_seq (list): state sequence of np.array (nx,). 
-            u_seq (list): action sequence of np.array (nu,). 
-            x_next_seq (list): next state sequence of np.array (nx,). 
-            
-        Returns:
-            np.array: inputs for GP training, (N, nx+nu).
-            np.array: targets for GP training, (N, nx).
-
-        """
-        # Get the predicted dynamics. This is a linear prior, thus we need to account for the fact that
-        # it is linearized about an eq using self.X_GOAL and self.U_GOAL.
-        x_pred_seq = self.prior_dynamics_func(x0=x_seq.T - self.prior_ctrl.X_LIN[:, None],
-                                               p=u_seq.T - self.prior_ctrl.U_LIN[:,None])['xf'].toarray()
-        targets = (x_next_seq.T - (x_pred_seq+self.prior_ctrl.X_LIN[:,None])).transpose()  # (N, nx).
-        inputs = np.hstack([x_seq, u_seq])  # (N, nx+nu).
-        return inputs, targets
-
-    def precompute_probabilistic_limits(self,
-                                        print_sets=True
-                                        ):
-        """This updates the constraint value limits to account for the uncertainty in the dynamics rollout.
-
-        Args:
-            print_sets (bool): True to print out the sets for debugging purposes.
-
-        """
-        nx, nu = self.model.nx, self.model.nu
-        T = self.T
-        state_covariances = np.zeros((self.T+1, nx, nx))
-        input_covariances = np.zeros((self.T, nu, nu))
-
-        # Initilize lists for the tightening of each constraint.
-        state_constraint_set = []
-        for state_constraint in self.constraints.state_constraints:
-            state_constraint_set.append(np.zeros((state_constraint.num_constraints, T+1)))
-
-        input_constraint_set = []
-        for input_constraint in self.constraints.input_constraints:
-            input_constraint_set.append(np.zeros((input_constraint.num_constraints, T)))
-
-        if self.x_prev_mu is not None and self.u_prev is not None and self.x_prev_cov is not None:
-
-            cov_x = np.diag([self.initial_rollout_std**2]*nx)
-            cov_u = np.zeros((nu, nu))
-
-            for t in range(T):
-
-                state_covariances[t] = cov_x
-                input_covariances[t] = cov_u                
-
-                # Loop through input constraints and tighten by the required ammount.
-                for ui, input_constraint in enumerate(self.constraints.input_constraints):
-                    input_constraint_set[ui][:, t] = -1*self.inverse_cdf * \
-                                                    np.absolute(input_constraint.A) @ np.sqrt(np.diag(cov_u))
-                    
-                for si, state_constraint in enumerate(self.constraints.state_constraints):
-                    state_constraint_set[si][:, t] = -1*self.inverse_cdf * \
-                                                    np.absolute(state_constraint.A) @ np.sqrt(np.diag(cov_x))
-                    
-                # Compute the next step propogated state covariance using sigma points    
-                # Sigma Point Expand
-                sigma_points, weights = generate_sigma_points_gaussian( cs.reshape(self.x_prev_mu[:,t],-1,1), cs.diag( self.x_prev_cov[:,t] ), np.zeros((nx,1)), 1.0 )
-
-                j = 0                
-                z = cs.vertcat(sigma_points[:,j], self.u_prev[:,t])
-                # mu_d_tensor, cov_d_tensor = self.gaussian_process.predict(z, return_pred=False)
-                # cov_d = cov_d_tensor.detach().numpy()
-                # mu_d = mu_d_tensor.detach().numpy()
-                pred = self.gaussian_process.casadi_predict(z=z)
-                cov_d = pred["covariance"]
-                mu_d = pred["mean"]
-                cov = self.Bd @ cov_d @ self.Bd.T
-                mu = self.Bd @ mu_d.reshape((nx,1)) + cs.reshape(self.prior_dynamics_func(x0=cs.reshape(sigma_points[:,j]-self.prior_ctrl.X_LIN[:,None],6,1),
-                                                        p=cs.reshape(self.u_prev[:, t],2,1)-self.prior_ctrl.U_LIN[:,None])['xf'], 6,1) + \
-                                cs.reshape(self.prior_ctrl.X_LIN[:,None], 6,1)
-                root_term = get_ut_cov_root_diagonal(cov) 
-                new_points, temp_weights = generate_sigma_points_gaussian( mu, root_term, np.zeros((nx,1)), 1.0 )
-                new_weights = temp_weights * weights[:,j]                    
-                for j in range(1,2*nx+1):
-                    z = cs.vertcat(sigma_points[:,j], self.u_prev[:,t])
-                    # mu_d_tensor, cov_d_tensor = self.gaussian_process.predict(z[None,:], return_pred=False)
-                    # cov_d = cov_d_tensor.detach().numpy()
-                    # mu_d = mu_d_tensor.detach().numpy()
-                    pred = self.gaussian_process.casadi_predict(z=z)
-                    cov_d = pred["covariance"]
-                    mu_d = pred["mean"]
-                    cov = self.Bd @ cov_d @ self.Bd.T
-                    mu = self.Bd @ mu_d.reshape((nx,1)) + cs.reshape(self.prior_dynamics_func(x0=cs.reshape(sigma_points[:,j]-self.prior_ctrl.X_LIN[:,None],6,1),
-                                                            p=cs.reshape(self.u_prev[:, t],2,1)-self.prior_ctrl.U_LIN[:,None])['xf'], 6,1) + \
-                                    cs.reshape(self.prior_ctrl.X_LIN[:,None], 6,1)
-                    root_term = get_ut_cov_root_diagonal(cov)   
-                    temp_points, temp_weights = generate_sigma_points_gaussian( mu, root_term, np.zeros((nx,1)), 1.0 )
-                    new_points = cs.hcat([ new_points, temp_points ])
-                    new_weights = cs.hcat([ new_weights, temp_weights * weights[:,j]  ])  
-
-                # Sigma Point compress
-                mu_x, cov_x = get_mean_cov( new_points, new_weights )
-                   
-            # Udate Final covariance.
-            for si, state_constraint in enumerate(self.constraints.state_constraints):
-                state_constraint_set[si][:,-1] = -1 * self.inverse_cdf * \
-                                                np.absolute(state_constraint.A) @ np.sqrt(np.diag(cov_x))
-            state_covariances[-1] = cov_x
-        print(f"state covarainces: {state_covariances}")
-        if print_sets:
-            print("Probabilistic State Constraint values along Horizon:")
-            print(state_constraint_set)
-            print("Probabilistic Input Constraint values along Horizon:")
-            print(input_constraint_set)
-        self.results_dict['input_constraint_set'].append(input_constraint_set)
-        self.results_dict['state_constraint_set'].append(state_constraint_set)
-        self.results_dict['state_horizon_cov'].append(state_covariances)
-        self.results_dict['input_horizon_cov'].append(input_covariances)
-        return state_constraint_set, input_constraint_set
-
     @staticmethod
     def controller(params, X, x_goal, A, bc):
 
@@ -402,13 +290,28 @@ class FORESEE_CBF_QP_COV(MPC):
             new_points = jnp.zeros((n*(2*n+1),N))
             new_weights = jnp.zeros((2*n+1,N))
 
+            mu = get_mean(sigma_points, weights)
+            u = FORESEE_CBF_QP_COV.controller(params, mu.reshape(-1,1), X_GOAL, consA, consb).reshape(-1,1)
+
+            # for i in range(N):
+            #     u = FORESEE_CBF_QP_COV.controller(params, sigma_points[:,i].reshape(-1,1), X_GOAL, consA, consb).reshape(-1,1)
+            #     z = jnp.append( sigma_points[:,i].reshape(-1,1), u, axis=0 )
+            #     pred_mu, next_state_cov = self.gaussian_process.jax_predict(z=z)
+            #     next_state_cov_root = get_ut_cov_root_diagonal(next_state_cov)    
+            #     next_state_mu = sigma_points[:,i].reshape(-1,1) - x_eq + (A @ (sigma_points[:,i].reshape(-1,1) - x_eq) + B @ (u - u_eq))*dt + x_eq + pred_mu           
+            #     # pdb.set_trace()            
+            #     temp_points, temp_weights = generate_sigma_points_gaussian( next_state_mu, next_state_cov_root, jnp.zeros((n,1)), 1.0 )
+            #     new_points = new_points.at[:,i].set( temp_points.reshape(-1,1, order='F')[:,0] )
+            #     new_weights = new_weights.at[:,i].set( temp_weights.reshape(-1,1, order='F')[:,0] * weights[:,i] )   
+            # return_points, return_weights = new_points, new_weights
+
             def body(i, inputs):
                 new_points, new_weights = inputs        
-                u = FORESEE_CBF_QP_COV.controller(params, sigma_points[:,i].reshape(-1,1), X_GOAL, consA, consb).reshape(-1,1)
+                # u = FORESEE_CBF_QP_COV.controller(params, sigma_points[:,i].reshape(-1,1), X_GOAL, consA, consb).reshape(-1,1)
                 z = jnp.append( sigma_points[:,i].reshape(-1,1), u, axis=0 )
                 pred_mu, next_state_cov = self.gaussian_process.jax_predict(z=z)
-                next_state_cov_root = jnp.zeros((6,6)) #get_ut_cov_root_diagonal(next_state_cov)    
-                next_state_mu = (A @ (sigma_points[:,i].reshape(-1,1) - x_eq) + B @ (u - u_eq))*dt + x_eq + pred_mu                       
+                next_state_cov_root = get_ut_cov_root_diagonal(next_state_cov)    
+                next_state_mu = sigma_points[:,i].reshape(-1,1) - x_eq + (A @ (sigma_points[:,i].reshape(-1,1) - x_eq) + B @ (u - u_eq))*dt + x_eq + pred_mu                       
                 temp_points, temp_weights = generate_sigma_points_gaussian( next_state_mu, next_state_cov_root, jnp.zeros((n,1)), 1.0 )
                 new_points = new_points.at[:,i].set( temp_points.reshape(-1,1, order='F')[:,0] )
                 new_weights = new_weights.at[:,i].set( temp_weights.reshape(-1,1, order='F')[:,0] * weights[:,i] )   
@@ -430,15 +333,25 @@ class FORESEE_CBF_QP_COV(MPC):
                 sigma_points, weights = generate_sigma_points_gaussian( X, jnp.zeros((6,6)), jnp.zeros((6,1)), 1.0 )   
                 mus = jnp.zeros((6, T+1))
                 covs = jnp.zeros((6,T+1))         
+                mus = mus.at[:,0].set( X[:,0] )
+                covs = covs.at[:,0].set( jnp.zeros(6) )
+
+                # for i in range(T):
+                #     expanded_sigma_points, expanded_weights = FORESEE_CBF_QP_COV.sigma_point_expand( sigma_points, weights, params, A, B, x_eq, u_eq, X_GOAL, consA, consb )
+                #     mu, cov, sigma_points, weights = sigma_point_compress( expanded_sigma_points, expanded_weights )
+                #     pdb.set_trace()
+                #     mus = mus.at[:,i+1].set( mu[:,0] )
+                #     covs = covs.at[:,i+1].set( jnp.diag(cov) )
+                
                 def body(i, inputs):
                     sigma_points, weights, mus, covs = inputs
                     expanded_sigma_points, expanded_weights = FORESEE_CBF_QP_COV.sigma_point_expand( sigma_points, weights, params, A, B, x_eq, u_eq, X_GOAL, consA, consb )
                     mu, cov, sigma_points, weights = sigma_point_compress( expanded_sigma_points, expanded_weights )
-                    get_mean_cov(sigma_points, weights)
                     mus = mus.at[:,i+1].set( mu[:,0] )
                     covs = covs.at[:,i+1].set( jnp.diag(cov) )
-                    return sigma_points, weights, mus, covs        
-                mus, covs, final_points, final_weights = lax.fori_loop( 0, T, body, (sigma_points, weights, mus, covs))
+                    return sigma_points, weights, mus, covs
+                final_points, final_weights, mus, covs = lax.fori_loop( 0, T, body, (sigma_points, weights, mus, covs))
+
                 return mus, covs
             return predict_future
     
@@ -447,25 +360,44 @@ class FORESEE_CBF_QP_COV(MPC):
         scale = 1.0
         pos_error = 2 * ( jnp.sum( jnp.square(scale * (Xs[0,:]-x_goal[0,0]) ) ) + jnp.sum( jnp.square(scale * (Xs[2,:]-x_goal[1,0]) ) ) )
         pos_error_terminal = 8 * ( jnp.sum( jnp.square(scale * (Xs[0,-1]-x_goal[0,0]))  ) + jnp.sum( jnp.square(scale * (Xs[2,-1]-x_goal[1,0]) ) ) )
-        vel_error = 3000 * ( jnp.sum( jnp.square( scale * Xs[1,:]) ) + jnp.sum( jnp.square(scale * Xs[2,:]) ) )
+        vel_error = 2 * ( jnp.sum( jnp.square( scale * Xs[1,:]) ) + jnp.sum( jnp.square(scale * Xs[2,:]) ) )
         # theta_error = 1 * jnp.sum( jnp.square(scale * (Xs[4,:]-x_goal[4,0]) ) )
         return pos_error + vel_error  + pos_error_terminal #+ theta_error
-        
-
-
+    
+    @staticmethod
+    def constraint_evaluate(Xs, consA, consb):
+        # constraint is consA x <= consb
+        mu_Xs, cov_Xs = Xs
+        mu = jnp.append( mu_Xs[0,:].reshape(1,-1), mu_Xs[2,:].reshape(1,-1), axis=0)
+        cov = jnp.append( cov_Xs[0,:].reshape(1,-1), cov_Xs[2,:].reshape(1,-1), axis=0)
+        Ac = jnp.array([consA[0,0], consA[0,2]]).reshape(-1,1)
+        const = consb - Ac.T @ mu - 1.96 * jnp.sqrt( jnp.sum((Ac*Ac) * cov, axis=0) ) # should still be > 0
+        min_const = jnp.min( const )
+        return min_const
 
     def setup_gp_optimizer(self):
         """Sets up nonlinear optimization problem including cost objective, variable bounds and dynamics constraints.
 
         """
         FORESEE_CBF_QP_COV.sigma_point_expand = self.setup_sigma_point_expand()
-        FORESEE_CBF_QP_COV.predict = self.setup_predict(5)#self.T)
+        FORESEE_CBF_QP_COV.predict = self.setup_predict(self.T) #self.T)
 
         FORESEE_CBF_QP_COV.reward_func = lambda params, X, A, B, x_eq, u_eq, X_GOAL, consA, consb: FORESEE_CBF_QP_COV.reward( FORESEE_CBF_QP_COV.predict(params, X, A, B, x_eq, u_eq, X_GOAL, consA, consb)[0], X_GOAL )
+        FORESEE_CBF_QP_COV.constraint_func = lambda params, X, A, B, x_eq, u_eq, X_GOAL, consA, consb: FORESEE_CBF_QP_COV.constraint_evaluate( FORESEE_CBF_QP_COV.predict(params, X, A, B, x_eq, u_eq, X_GOAL, consA, consb), consA, consb )
 
         FORESEE_CBF_QP_COV.predict_grad = jit( value_and_grad( FORESEE_CBF_QP_COV.reward_func, 0 ) )
-        return
+        FORESEE_CBF_QP_COV.constraint_grad = jit( value_and_grad( FORESEE_CBF_QP_COV.constraint_func, 0 ) )
 
+        self.co = cp.Variable((3,1))
+        # self.cQ = cp.Parameter((3,3), value)
+        self.cG = cp.Parameter((1,3), value=np.zeros((1,3)))
+        self.cA = cp.Parameter((1,3), value=np.zeros((1,3)))
+        self.cb = cp.Parameter((1,1), value=np.zeros((1,1)))
+        const = [ self.cb + self.cA @ self.co >= 0 ]
+        obj = cp.Minimize( cp.sum_squares(self.co) - 2 * self.cG @ self.co )
+        self.prob = cp.Problem(obj, const)
+        return
+        
         ########################################################
 
 
@@ -486,8 +418,9 @@ class FORESEE_CBF_QP_COV(MPC):
         print(f"time step: {self.dt}")
         x_goal = self.env.X_GOAL.reshape(-1,1) #jnp.array([-1.0, 0.0]).reshape(-1,1)  #jnp.array([-0.7, 0.5]).reshape(-1,1)  # 
         # Select current action
-        z = jnp.append( obs.reshape(-1,1), jnp.zeros((2,1)), axis=0 )
-        self.gaussian_process.jax_predict(z=z)     
+        z = np.append( obs.reshape(-1,1), np.zeros((2,1)), axis=0 )
+        muj, covj = self.gaussian_process.jax_predict(z=z)     
+        mup, covp = self.gaussian_process.predict(z.T, return_pred=False)
         action = FORESEE_CBF_QP_COV.controller(self.params, obs.reshape(-1,1), x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
         
         
@@ -501,29 +434,75 @@ class FORESEE_CBF_QP_COV(MPC):
 
         # print(f"A; {A} \n B:{B}, \n x_eq: {x_eq}, \n u_eq: {u_eq}")
         # exit()
-        
+        mus, covs = FORESEE_CBF_QP_COV.predict(jnp.copy(self.params), obs.reshape(-1,1), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
         reward, grads = FORESEE_CBF_QP_COV.predict_grad( jnp.copy(self.params), obs.reshape(-1,1), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b )
+        const = FORESEE_CBF_QP_COV.constraint_func( jnp.copy(self.params), obs.reshape(-1,1), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b )
         print(f"rewards: {reward}, gras:{grads}")
+
+        pdb.set_trace()
 
         t0 = time.time()
         
         if self.adapt:
             print(f"HELLOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO")
             for i in range(self.num_adapt_iterations):
-                states, actions = FORESEE_CBF_QP_COV.predict(jnp.copy(self.params), obs.reshape(-1,1), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
+                mus, covs = FORESEE_CBF_QP_COV.predict(jnp.copy(self.params), obs.reshape(-1,1), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
                 reward, grads = FORESEE_CBF_QP_COV.predict_grad( jnp.copy(self.params), obs.reshape(-1,1), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b )
-                # print(f"reward: {reward}, grad: {grads}")
-                # exit()
-                # pdb.set_trace()
                 grads = np.asarray(grads)
                 lr = 0.0001 # unstable with 0.001. need atleast 0.0001
                 self.params[0] = np.clip( self.params[0] - lr * np.clip( grads[0], -1.0, 1.0 ), 0.0, None )
                 self.params[1] = np.clip( self.params[1] - lr * np.clip( grads[1], -1.0, 1.0 ), 0.0, None )
                 self.params[2] = np.clip( self.params[2] - lr * np.clip( grads[2], -1.0, 1.0 ), 0.0, None )
+                # pdb.set_trace()
+                # solve QP
+                # cons, cons_grads = FORESEE_CBF_QP_COV.constraint_grad( jnp.copy(self.params), obs.reshape(-1,1), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b )
+                # cons_grads = np.asarray(cons_grads)
+                # cons = np.asarray(cons)
+
+                # if cons >= 0:
+                #     # maintain constraint
+                #     grads = - lr * np.clip(np.array( [grads[0], grads[1], grads[2] ]), -1.0, 1.0).reshape((1,3))
+                #     self.cG.value = grads
+                #     self.cA.value = np.clip(np.array( [cons_grads[0], cons_grads[1], cons_grads[2] ]), -1.0, 1.0).reshape((1,3))
+                #     self.cb.value[0,0] = cons
+                #     self.prob.solve()
+                # else:
+                #     self.cG.value = lr * np.clip(np.array( [cons_grads[0], cons_grads[1], cons_grads[2] ]), -1.0, 1.0).reshape((1,3))
+                #     self.cA.value = np.zeros((1,3))
+                #     self.cb.value[0,0] = 0
+                #     self.prob.solve()
+                #     print(f"Constraint violated !!!!!!  ")
+                #     exit()
+
+                # self.params[0] = np.clip( self.params[0] + self.co.value[0,0], 0.0, None )
+                # self.params[1] = np.clip( self.params[1] + self.co.value[1,0], 0.0, None )
+                # self.params[2] = np.clip( self.params[2] + self.co.value[2,0], 0.0, None )
+
+                    
+
+
+
+
             print(f"************************************************* time: {time.time()-t0} *********************************************")
             print(f"*************** params: {self.params}")
-        
-        return action, jnp.copy(self.params)         
+
+            state_covariances = np.zeros((self.T+1, nx, nx))
+            # pdb.set_trace()
+            mus = np.asarray(mus)
+            covs = np.asarray(covs)
+            for i in range(covs.shape[1]):
+                state_covariances[i] = np.diag( covs[:,i] )
+            self.results_dict['state_horizon_cov'].append(state_covariances)
+            self.results_dict['horizon_states'].append( mus )
+        else:
+            self.results_dict['state_horizon_cov'].append(jnp.zeros((T+1, nx, nx)))
+            self.results_dict['horizon_states'].append( jnp.zeros((nx, T)) )
+
+
+                    
+        return action, jnp.copy(self.params)       
+
+
 
     def learn(self,
               input_data=None,

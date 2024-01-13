@@ -5,6 +5,9 @@ import jax.numpy as jnp
 from jax import jit, lax
 # import numpy as np
 
+from jax import config
+config.update("jax_enable_x64", True)
+
 # @jit
 def step(x,u,dt):
     return x+u*dt
