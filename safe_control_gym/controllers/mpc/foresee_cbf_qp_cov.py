@@ -148,7 +148,7 @@ class FORESEE_CBF_QP_COV(MPC):
         # kT2y = 1.0
         # kT20 = 5.0
      
-        self.adapt = True
+        self.adapt = False
         self.num_adapt_iterations = 10
 
         self.params = np.array([ kx, kv, krx, kR, kRv ])
@@ -291,27 +291,29 @@ class FORESEE_CBF_QP_COV(MPC):
             new_weights = jnp.zeros((2*n+1,N))
 
             mu = get_mean(sigma_points, weights)
-            u = FORESEE_CBF_QP_COV.controller(params, mu.reshape(-1,1), X_GOAL, consA, consb).reshape(-1,1)
+            control = FORESEE_CBF_QP_COV.controller(params, mu.reshape(-1,1), X_GOAL, consA, consb).reshape(-1,1)
 
             # for i in range(N):
-            #     u = FORESEE_CBF_QP_COV.controller(params, sigma_points[:,i].reshape(-1,1), X_GOAL, consA, consb).reshape(-1,1)
-            #     z = jnp.append( sigma_points[:,i].reshape(-1,1), u, axis=0 )
+            #     # control = FORESEE_CBF_QP_COV.controller(params, sigma_points[:,i].reshape(-1,1), X_GOAL, consA, consb).reshape(-1,1)
+            #     z = jnp.append( sigma_points[:,i].reshape(-1,1), control, axis=0 )
             #     pred_mu, next_state_cov = self.gaussian_process.jax_predict(z=z)
+            #     # pdb.set_trace()
             #     next_state_cov_root = get_ut_cov_root_diagonal(next_state_cov)    
-            #     next_state_mu = sigma_points[:,i].reshape(-1,1) - x_eq + (A @ (sigma_points[:,i].reshape(-1,1) - x_eq) + B @ (u - u_eq))*dt + x_eq + pred_mu           
+            #     next_state_mu = sigma_points[:,i].reshape(-1,1) - x_eq + (A @ (sigma_points[:,i].reshape(-1,1) - x_eq) + B @ (control - u_eq))*dt + x_eq + pred_mu           
             #     # pdb.set_trace()            
             #     temp_points, temp_weights = generate_sigma_points_gaussian( next_state_mu, next_state_cov_root, jnp.zeros((n,1)), 1.0 )
+            #     pdb.set_trace()
             #     new_points = new_points.at[:,i].set( temp_points.reshape(-1,1, order='F')[:,0] )
             #     new_weights = new_weights.at[:,i].set( temp_weights.reshape(-1,1, order='F')[:,0] * weights[:,i] )   
             # return_points, return_weights = new_points, new_weights
 
             def body(i, inputs):
                 new_points, new_weights = inputs        
-                # u = FORESEE_CBF_QP_COV.controller(params, sigma_points[:,i].reshape(-1,1), X_GOAL, consA, consb).reshape(-1,1)
-                z = jnp.append( sigma_points[:,i].reshape(-1,1), u, axis=0 )
+                # control = FORESEE_CBF_QP_COV.controller(params, sigma_points[:,i].reshape(-1,1), X_GOAL, consA, consb).reshape(-1,1)
+                z = jnp.append( sigma_points[:,i].reshape(-1,1), control, axis=0 )
                 pred_mu, next_state_cov = self.gaussian_process.jax_predict(z=z)
                 next_state_cov_root = get_ut_cov_root_diagonal(next_state_cov)    
-                next_state_mu = sigma_points[:,i].reshape(-1,1) - x_eq + (A @ (sigma_points[:,i].reshape(-1,1) - x_eq) + B @ (u - u_eq))*dt + x_eq + pred_mu                       
+                next_state_mu = sigma_points[:,i].reshape(-1,1) - x_eq + (A @ (sigma_points[:,i].reshape(-1,1) - x_eq) + B @ (control - u_eq))*dt + x_eq + pred_mu                       
                 temp_points, temp_weights = generate_sigma_points_gaussian( next_state_mu, next_state_cov_root, jnp.zeros((n,1)), 1.0 )
                 new_points = new_points.at[:,i].set( temp_points.reshape(-1,1, order='F')[:,0] )
                 new_weights = new_weights.at[:,i].set( temp_weights.reshape(-1,1, order='F')[:,0] * weights[:,i] )   
@@ -423,7 +425,7 @@ class FORESEE_CBF_QP_COV(MPC):
         mup, covp = self.gaussian_process.predict(z.T, return_pred=False)
         action = FORESEE_CBF_QP_COV.controller(self.params, obs.reshape(-1,1), x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
         
-        
+        # pdb.set_trace()
         # Update parameters
         nx, nu = self.model.nx, self.model.nu
         T = self.T
@@ -439,7 +441,7 @@ class FORESEE_CBF_QP_COV(MPC):
         const = FORESEE_CBF_QP_COV.constraint_func( jnp.copy(self.params), obs.reshape(-1,1), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b )
         print(f"rewards: {reward}, gras:{grads}")
 
-        pdb.set_trace()
+        # pdb.set_trace()
 
         t0 = time.time()
         
@@ -495,8 +497,8 @@ class FORESEE_CBF_QP_COV(MPC):
             self.results_dict['state_horizon_cov'].append(state_covariances)
             self.results_dict['horizon_states'].append( mus )
         else:
-            self.results_dict['state_horizon_cov'].append(jnp.zeros((T+1, nx, nx)))
-            self.results_dict['horizon_states'].append( jnp.zeros((nx, T)) )
+            self.results_dict['state_horizon_cov'].append(np.zeros((T+1, nx, nx)))
+            self.results_dict['horizon_states'].append( np.zeros((nx, T+1)) )
 
 
                     

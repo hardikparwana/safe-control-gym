@@ -47,7 +47,7 @@ def get_mean_cov(sigma_points, weights):
 def get_ut_cov_root_diagonal(cov):
     # return jnp.zeros((4,4))
     offset = 0.000  # TODO: make sure not zero here
-    root_term = jnp.diag( jnp.diagonal(cov)+offset  )
+    root_term = jnp.diag( jnp.sqrt(jnp.diagonal(cov)+offset)  )
     return root_term
     
     #root0 = jnp.sqrt((offset+cov[0,0]))
@@ -77,15 +77,10 @@ def get_mean_cov_skew_kurt_for_generation( sigma_points, weights ):
     cov = jnp.diag(jnp.sum(centered_points**2 * weights[0], axis=1))
     
     skewness_temp = jnp.sum(centered_points**3 * weights[0], axis=1) #/ cov[0,0]**(3/2) # for scipy    
-    skewness = skewness_temp[0] / cov[0,0]**(3/2)
-    skewness = jnp.append(skewness, skewness_temp[1] / cov[1,1]**(3/2))
-    skewness = jnp.append(skewness, skewness_temp[2] / cov[2,2]**(3/2))
-    skewness = jnp.append(skewness, skewness_temp[3] / cov[3,3]**(3/2))
+    skewness = skewness_temp / jnp.diag(cov)**(3/2)
+
     kurt_temp = jnp.sum(centered_points**4 * weights[0], axis=1)# / cov[0,0]**(4/2)  # -3 # -3 for scipy
-    kurt = kurt_temp[0]/cov[0,0]**(4/2)
-    kurt = jnp.append(kurt, kurt_temp[1]/cov[1,1]**(4/2))
-    kurt = jnp.append(kurt, kurt_temp[2]/cov[2,2]**(4/2))
-    kurt = jnp.append(kurt, kurt_temp[3]/cov[3,3]**(4/2))
+    kurt = kurt_temp / jnp.diag(cov)**(4/2)
 
     return mu, cov, skewness.reshape(-1,1), kurt.reshape(-1,1)
 
