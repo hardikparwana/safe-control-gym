@@ -135,9 +135,12 @@ class FORESEE_CBF_QP_COV(MPC):
             **kwargs)
         
         # Setup controller parameters
-        kx = 0.09 #0.06 #0.09 #0.2 #0.1 #0.5 # Attarction
-        kv = 0.05 #0.1 #0.05 #0.20000002#  0.3 # Attraction
-        krx = 0.4 #0.4 #0.8 # Repulsion
+        # kx = 0.09 #0.06 #0.09 #0.2 #0.1 #0.5 # Attarction
+        # kv = 0.05 #0.1 #0.05 #0.20000002#  0.3 # Attraction
+        # krx = 0.4 #0.4 #0.8 # Repulsion
+        kx = 0.03 #0.06 #0.09 #0.2 #0.1 #0.5 # Attarction
+        kv = 0.02 #0.1 #0.05 #0.20000002#  0.3 # Attraction
+        krx = 0 #0.4 #0.8 # Repulsion
         kR = 60.0
         kRv = 10.0
         # krv = 1.0 # Repulsion
@@ -148,7 +151,8 @@ class FORESEE_CBF_QP_COV(MPC):
         # kT2y = 1.0
         # kT20 = 5.0
      
-        self.adapt = False
+        self.adapt = True
+        # self.adapt = False
         self.num_adapt_iterations = 10
 
         self.params = np.array([ kx, kv, krx, kR, kRv ])
@@ -291,7 +295,7 @@ class FORESEE_CBF_QP_COV(MPC):
             new_weights = jnp.zeros((2*n+1,N))
 
             mu = get_mean(sigma_points, weights)
-            control = FORESEE_CBF_QP_COV.controller(params, mu.reshape(-1,1), X_GOAL, consA, consb).reshape(-1,1)
+            # control = FORESEE_CBF_QP_COV.controller(params, mu.reshape(-1,1), X_GOAL, consA, consb).reshape(-1,1)
 
             # for i in range(N):
             #     # control = FORESEE_CBF_QP_COV.controller(params, sigma_points[:,i].reshape(-1,1), X_GOAL, consA, consb).reshape(-1,1)
@@ -309,7 +313,7 @@ class FORESEE_CBF_QP_COV(MPC):
 
             def body(i, inputs):
                 new_points, new_weights = inputs        
-                # control = FORESEE_CBF_QP_COV.controller(params, sigma_points[:,i].reshape(-1,1), X_GOAL, consA, consb).reshape(-1,1)
+                control = FORESEE_CBF_QP_COV.controller(params, sigma_points[:,i].reshape(-1,1), X_GOAL, consA, consb).reshape(-1,1)
                 z = jnp.append( sigma_points[:,i].reshape(-1,1), control, axis=0 )
                 pred_mu, next_state_cov = self.gaussian_process.jax_predict(z=z)
                 next_state_cov_root = get_ut_cov_root_diagonal(next_state_cov)    

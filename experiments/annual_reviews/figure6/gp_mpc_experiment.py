@@ -7,6 +7,7 @@ See Figure 6 in https://arxiv.org/pdf/2108.06266.pdf.
 # quad config: https://github.com/utiasDSL/safe-control-gym/blob/83fae93172782f7c6e98063da0b2425d3f741f1b/safe_control_gym/envs/gym_pybullet_drones/quadrotor.yaml#L17
 # quad model: https://github.com/utiasDSL/safe-control-gym/blob/83fae93172782f7c6e98063da0b2425d3f741f1b/safe_control_gym/envs/gym_pybullet_drones/quadrotor.py
 import os
+import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 import munch
@@ -32,7 +33,8 @@ def reward(Xs, x_goal):
 def plot_xz_comparison_diag_constraint(prior_run,
                                        run,
                                        init_ind,
-                                       dir=None
+                                       dir=None,
+                                       steps=30
                                        ):
     """
 
@@ -43,17 +45,19 @@ def plot_xz_comparison_diag_constraint(prior_run,
     limit_vals = np.array([[-2.1, -1.0],
                            [2.0, 3.1]])
     ax.plot(limit_vals[:,0], limit_vals[:,1], 'r-', label='Limit')
-    ax.legend(loc='lower center', bbox_to_anchor=(0.5, 1.05),
-              ncol=3, fancybox=True, shadow=True)
+    # ax.legend(loc='lower center', bbox_to_anchor=(0.5, 1.05),
+            #   ncol=3, fancybox=True, shadow=True)
     if dir is not None:
         np.savetxt(os.path.join(dir, 'limit.csv'), limit_vals, delimiter=',', header='x_limit,y_limit')
     ax.set_xlabel('X Position [m]')
     ax.set_ylabel('Z Position [m]')
-    ax.set_xlim([-1.2, 0.1])
-    ax.set_ylim([-0.05, 1.1])
+    ax.set_xlim(-1.2, 0.1)
+    ax.set_ylim(-0.05, 1.1)
     ax.set_box_aspect(0.5)
     plt.tight_layout()
     plt.savefig(dir+"comparison.png")
+    plt.savefig(dir+"comparison.eps")
+
 
     x_goal = jnp.array([0, 1.0]).reshape(-1,1)
     rewards = reward( run.obs.T, x_goal )
@@ -82,6 +86,8 @@ def plot_xz_comparison_diag_constraint(prior_run,
     # ax5.plot( run.params[:,4], 'k-*', label='kRv' )
     ax2[1,1].legend()
 
+    return ax
+
     # print(f"*********************** INFO ***************************")
     # print(f"Actual reward: { rewards }")
     # print(f"*********************** INFO ***************************")
@@ -95,7 +101,7 @@ def plot_2D_comparison_with_prior(state_inds,
                                   prior_run,
                                   crun, goal,
                                   init_ind,
-                                  dir=None
+                                  dir=None, steps=None
                                   ):
     """
 
@@ -113,13 +119,24 @@ def plot_2D_comparison_with_prior(state_inds,
     for i in range(crun.state_horizon_cov[init_ind].shape[0]): # time horizon
         prior_position = prior_horizon_states[state_inds,i]
 
-        if i == 1:
-            ax.plot(prior_position[0], prior_position[1], 'm.', label='Linear MPC Prediction horizon')
+        if i == 0:
+            ax.plot(prior_position[0], prior_position[1], 'r.', label='Linear MPC Prediction horizon')
         else:
-            ax.plot(prior_position[0], prior_position[1], 'm.')
+            ax.plot(prior_position[0], prior_position[1], 'r.')
         ax.annotate(str(i), prior_position)
 
+    increment = 3
+
+    indexes = np.linspace(0,len(crun.state_horizon_cov),len(crun.state_horizon_cov))
+    # indexes = -1 + 2*indexes/indexes[-1]
+    indexes = indexes/np.max(indexes)
+    cc = np.asarray(indexes)
+    # cc = np.tan(np.asarray(indexes))
+
+    cmap = matplotlib.cm.get_cmap('rainbow') #('CMRmap')
+
     xx = init_ind
+    ind = 0
     while (xx<len(crun.state_horizon_cov)):
         init_ind = xx
 
@@ -153,40 +170,43 @@ def plot_2D_comparison_with_prior(state_inds,
             print(f"***************** PRINT INFO ************************")
             position = horizon_states[state_inds, i]
             
-            if i == 1:
-                # ax.plot(position[0], position[1], 'k.', label='GP-MPC Prediction horizon')
-                ax.plot(position[0], position[1], '.', label='GP-MPC Prediction horizon')
-                pos, major_axis_length, minor_axis_length, alpha = add_2d_cov_ellipse(position, cov, ax, legend=True)
+            if i == 0:
+                ax.plot(position[0], position[1], 'k.') #, label='GP-MPC Prediction horizon')
+                # ax.plot(position[0], position[1], '.', label='GP-MPC Prediction horizon')
+                pos, major_axis_length, minor_axis_length, alpha = add_2d_cov_ellipse(position, cov, ax, legend=True, c=cmap(cc[ind]))
                 if dir is not None:
                     run_ellipse_data[i,:2] = pos
                     run_ellipse_data[i,2] = major_axis_length
                     run_ellipse_data[i,3] = minor_axis_length
                     run_ellipse_data[i,4] = alpha
             else:
-                ax.plot(position[0], position[1], 'k.')
-                pos, major_axis_length, minor_axis_length, alpha = add_2d_cov_ellipse(position, cov, ax)
+                # ax.plot(position[0], position[1], 'k.')
+                pos, major_axis_length, minor_axis_length, alpha = add_2d_cov_ellipse(position, cov, ax, c=cmap(cc[ind]))
                 if dir is not None:
                     run_ellipse_data[i, :2] = pos
                     run_ellipse_data[i, 2] = major_axis_length
                     run_ellipse_data[i, 3] = minor_axis_length
                     run_ellipse_data[i, 4] = alpha
-            ax.annotate(str(i), position)
+            # ax.annotate(str(i), position)
         if dir is not None:
             np.savetxt(os.path.join(dir, 'cov_ellipses.csv'), run_ellipse_data, delimiter=',',
                     header='pos_x,pos_y,major_axis_length,minor_axis_length,alpha')
             
-        xx = xx + 5
+        xx = xx + increment
+        ind += increment
 
-    ax.set_aspect('equal')
+    # ax.set_aspect('equal')
+    ax.set_xlim([-1.3,0.2])
     ax.axis('equal')
-    ax.legend()
+    # ax.legend()
     return ax
 
 
 def add_2d_cov_ellipse(position,
                        cov,
                        ax,
-                       legend=False
+                       legend=False, 
+                       c = None
                        ):
     """
 
@@ -208,13 +228,14 @@ def add_2d_cov_ellipse(position,
                           minor_axis_length,
                           angle=alpha,
                           alpha=0.5,
-                          label='95% C.I.')
+                          label='95% C.I.', fc=c)
     else:
         ellipse = Ellipse(position,
                           major_axis_length,
                           minor_axis_length,
                           angle=alpha,
-                          alpha=0.5)
+                          alpha=0.5,
+                          fc=c)
     ax.add_artist(ellipse)
     return position, major_axis_length, minor_axis_length, alpha
 
@@ -257,12 +278,13 @@ if __name__ == "__main__":
     print("Press any key to continue.. ")
     if not config.train_only:
         # Run with the learned gp model.
-
+        steps = 30
         run_results = ctrl.run(env=test_env,
-                               max_steps=30)  #50)
+                               max_steps=steps)  #50)
         ctrl.close()
         # Plot the results.
         prior_run = munch.munchify(prior_results)
         run = munch.munchify(run_results)
-        plot_xz_comparison_diag_constraint(prior_run, run, 1, dir=config.image_dir)
+        ax = plot_xz_comparison_diag_constraint(prior_run, run, 1, dir=config.image_dir, steps=steps)
+        pdb.set_trace()
         plt.show()

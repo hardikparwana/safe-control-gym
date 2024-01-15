@@ -47,6 +47,7 @@ def read_file(file_path, sep=","):
     if len(file_path) < 1 or not os.path.exists(file_path):
         return None
     # load file
+    print(f"file_pathg: {file_path}")
     f = open(file_path, "r")
     if "json" in file_path:
         data = json.load(f)
