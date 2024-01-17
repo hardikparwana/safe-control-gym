@@ -17,6 +17,14 @@ from safe_control_gym.envs.benchmark_env import Task
 
 import pdb
 
+from jax import config
+config.update("jax_enable_x64", True)
+from diffrax import diffeqsolve, ODETerm, Tsit5
+import jax
+import jax.numpy as jnp
+from jax import jit, lax, grad, value_and_grad
+import cvxpy as cp
+
 class LinearMPC(MPC):
     """ Simple linear MPC.
     
@@ -61,6 +69,15 @@ class LinearMPC(MPC):
         self.X_LIN = np.atleast_2d(self.env.X_GOAL)[0,:].T
         self.U_LIN = np.atleast_2d(self.env.U_GOAL)[0,:]
 
+        kx = 0.03 #0.06 #0.09 #0.2 #0.1 #0.5 # Attarction
+        kv = 0.02 #0.1 #0.05 #0.20000002#  0.3 # Attraction
+        krx = 0 #0.4 #0.8 # Repulsion
+        kR = 60.0
+        kRv = 10.0
+
+
+        self.params = np.array([ kx, kv, krx, kR, kRv ])
+
     def set_dynamics_func(self):
         """Updates symbolic dynamics with actual control frequency.
 
@@ -72,6 +89,7 @@ class LinearMPC(MPC):
         delta_x = cs.MX.sym('delta_x', self.model.nx,1)
         delta_u = cs.MX.sym('delta_u', self.model.nu,1)
         x_dot_lin_vec = dfdx @ delta_x + dfdu @ delta_u
+        # pdb.set_trace()
         self.linear_dynamics_func = cs.integrator(
             'linear_discrete_dynamics', self.model.integration_algo,
             {
@@ -153,6 +171,60 @@ class LinearMPC(MPC):
             "cost": cost
         }
 
+    @staticmethod
+    def controller(params, X, x_goal, A, bc):
+
+            p = jnp.array([ X[0,0], X[2,0] ]).reshape(-1,1)
+            pdot = jnp.array([ X[1,0], X[3,0] ]).reshape(-1,1)
+
+            kx = params[0]
+            kv = params[1]
+            krx = params[2]
+            kR = params[3] 
+            kRv = params[4]
+            
+            # attraction           
+            ad_attraction = - kx * (p - jnp.array([x_goal[0,0], x_goal[2,0]]).reshape(-1,1)) - kv * pdot 
+
+            # Repulsion
+            Ac = jnp.array([A[0,0], A[0,2]]).reshape(-1,1)
+            Ac = Ac / jnp.linalg.norm(Ac) # -Ac is the direction of improving gradient
+            ad_repulsion = - krx * Ac  * 1.0 * jnp.tanh( 0.01 / (bc.reshape(-1,1) - A @ X)  ) 
+            # pdb.set_trace()
+            #Based on perfect knowledge of dynamics
+            M = 0.027  #0.027 # 1.0
+            I = 1.4e-5  #0.5
+            g = 9.80
+            L = 0.028
+
+            # toal acceleration
+            ad = ad_attraction + ad_repulsion
+            target_thrust = ad + jnp.array([ 0, M*g ]).reshape(-1,1)
+            theta_d = jnp.arctan2( target_thrust[0,0], target_thrust[1,0] )
+
+            
+            scalar_thrust = target_thrust.T @ jnp.array([ jnp.sin(X[4,0]), jnp.cos(X[4,0]) ])
+            theta_ddot = - kR * (X[4,0]-theta_d) - kRv * X[5,0]
+            moment = I * theta_ddot
+
+            # moment = I * 0.001
+
+            T2 = 0.5 * ( scalar_thrust + moment / L )
+            T1 = 0.5 * ( scalar_thrust - moment / L )
+            
+            # pdb.set_trace()
+            action = jnp.array([T1[0], T2[0]])
+            action = jnp.clip( jnp.array( [T1[0], T2[0]] ), 0, 0.2)
+
+            # action = jnp.clip(action, 0.0, None )
+            # action = action / jnp.max( jnp.array([jnp.linalg.norm(action), 0.01]) ) * 0.2
+            # print(f"action: {action}")
+            # action = 0.2 * jnp.tanh(action)
+
+            # print(f"theta: {X[4,0]}, thetad: {theta_d}")
+
+            return action
+
     def select_action(self,
                       obs
                       ):
@@ -165,6 +237,14 @@ class LinearMPC(MPC):
             action (np.array): input/action to the task/env.
 
         """
+        # x_goal = self.env.X_GOAL.reshape(-1,1)
+        # # pdb.set_trace()
+        
+        # A = jnp.array([[-1.,  0.,  1.,  0.,  0.,  0.]])
+        # b = jnp.array([1.1])
+        # action = self.controller(self.params, jnp.copy(obs.reshape(-1,1)), x_goal, A, b)
+
+
         nx, nu = self.model.nx, self.model.nu
         T = self.T
         opti_dict = self.opti_dict
