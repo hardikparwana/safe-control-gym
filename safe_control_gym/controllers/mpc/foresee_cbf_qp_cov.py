@@ -157,9 +157,9 @@ class FORESEE_CBF_QP_COV(MPC):
         # kT2y = 1.0
         # kT20 = 5.0
      
-        # self.adapt = True
-        self.adapt = False
-        self.num_adapt_iterations = 10
+        self.adapt = True
+        # self.adapt = False
+        self.num_adapt_iterations = 15
         self.get_new_data = False
 
         self.params = np.array([ kx, kv, krx, kR, kRv ])
@@ -495,47 +495,61 @@ class FORESEE_CBF_QP_COV(MPC):
         reward, grads = FORESEE_CBF_QP_COV.predict_grad( jnp.copy(self.params), jnp.copy(obs.reshape(-1,1)), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b )
         const = FORESEE_CBF_QP_COV.constraint_func( jnp.copy(self.params), jnp.copy(obs.reshape(-1,1)), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b )
         print(f"rewards: {reward}, gras:{grads}")
-
+        
+        state_covariances = np.zeros((self.T+1, nx, nx))
+        mus = np.asarray(mus)
+        covs = np.asarray(covs)
+        for i in range(covs.shape[1]):
+            state_covariances[i] = np.diag( covs[:,i] )
+        self.results_dict['state_horizon_cov'].append(state_covariances)
+        self.results_dict['horizon_states'].append( mus )
         # pdb.set_trace()
 
         t0 = time.time()
         
         if self.adapt:
             print(f"HELLOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO")
-            for i in range(self.num_adapt_iterations):
+            # for i in range(self.num_adapt_iterations):
+            iters = 0
+            cons  = -0.1
+            while (iters < self.num_adapt_iterations) or (cons<0):
                 mus, covs = FORESEE_CBF_QP_COV.predict(jnp.copy(self.params), jnp.copy(obs.reshape(-1,1)), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
                 reward, grads = FORESEE_CBF_QP_COV.predict_grad( jnp.copy(self.params), jnp.copy(obs.reshape(-1,1)), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b )
                 grads = np.asarray(grads)
                 lr = 0.0001 # unstable with 0.001. need atleast 0.0001
-                self.params[0] = np.clip( self.params[0] - lr * np.clip( grads[0], -1.0, 1.0 ), 0.0, None )
-                self.params[1] = np.clip( self.params[1] - lr * np.clip( grads[1], -1.0, 1.0 ), 0.0, None )
-                self.params[2] = np.clip( self.params[2] - lr * np.clip( grads[2], -1.0, 1.0 ), 0.0, None )
-                self.params[3] = np.clip( self.params[3] - lr * np.clip( grads[3], -1.0, 1.0 ), 0.0, None )
-                self.params[4] = np.clip( self.params[4] - lr * np.clip( grads[4], -1.0, 1.0 ), 0.0, None )
+                # self.params[0] = np.clip( self.params[0] - lr * np.clip( grads[0], -1.0, 1.0 ), 0.0, None )
+                # self.params[1] = np.clip( self.params[1] - lr * np.clip( grads[1], -1.0, 1.0 ), 0.0, None )
+                # self.params[2] = np.clip( self.params[2] - lr * np.clip( grads[2], -1.0, 1.0 ), 0.0, None )
+                # self.params[3] = np.clip( self.params[3] - lr*0.1 * np.clip( grads[3], -1.0, 1.0 ), 0.0, None )
+                # self.params[4] = np.clip( self.params[4] - lr*0.1 * np.clip( grads[4], -1.0, 1.0 ), 0.0, None )
                 # pdb.set_trace()
                 # solve QP
-                # cons, cons_grads = FORESEE_CBF_QP_COV.constraint_grad( jnp.copy(self.params), jnp.copy(obs.reshape(-1,1)), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b )
-                # cons_grads = np.asarray(cons_grads)
-                # cons = np.asarray(cons)
+                cons, cons_grads = FORESEE_CBF_QP_COV.constraint_grad( jnp.copy(self.params), jnp.copy(obs.reshape(-1,1)), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b )
+                cons_grads = np.asarray(cons_grads)
+                cons = np.asarray(cons)
 
-                # if cons >= 0:
-                #     # maintain constraint
-                #     grads = - lr * np.clip(np.array( [grads[0], grads[1], grads[2] ]), -1.0, 1.0).reshape((1,3))
-                #     self.cG.value = grads
-                #     self.cA.value = np.clip(np.array( [cons_grads[0], cons_grads[1], cons_grads[2] ]), -1.0, 1.0).reshape((1,3))
-                #     self.cb.value[0,0] = cons
-                #     self.prob.solve()
-                # else:
-                #     self.cG.value = lr * np.clip(np.array( [cons_grads[0], cons_grads[1], cons_grads[2] ]), -1.0, 1.0).reshape((1,3))
-                #     self.cA.value = np.zeros((1,3))
-                #     self.cb.value[0,0] = 0
-                #     self.prob.solve()
-                #     print(f"Constraint violated !!!!!!  ")
-                #     exit()
+                if cons >= 0:
+                    # maintain constraint
+                    grads = - lr * np.clip(np.array( [grads[0], grads[1], grads[2] ]), -1.0, 1.0).reshape((1,3))
+                    self.cG.value = grads
+                    self.cA.value = np.clip(np.array( [cons_grads[0], cons_grads[1], cons_grads[2] ]), -1.0, 1.0).reshape((1,3))
+                    self.cb.value[0,0] = cons
+                    self.prob.solve()
+                else:
+                    self.cG.value = lr * np.clip(np.array( [cons_grads[0], cons_grads[1], cons_grads[2] ]), -1.0, 1.0).reshape((1,3))
+                    self.cA.value = np.zeros((1,3))
+                    self.cb.value[0,0] = 0
+                    self.prob.solve()
+                    print(f"Constraint violated !!!!!!  ")
+                    # exit()
 
-                # self.params[0] = np.clip( self.params[0] + self.co.value[0,0], 0.0, None )
-                # self.params[1] = np.clip( self.params[1] + self.co.value[1,0], 0.0, None )
-                # self.params[2] = np.clip( self.params[2] + self.co.value[2,0], 0.0, None )
+                self.params[0] = np.clip( self.params[0] + self.co.value[0,0], 0.0, None )
+                self.params[1] = np.clip( self.params[1] + self.co.value[1,0], 0.0, None )
+                self.params[2] = np.clip( self.params[2] + self.co.value[2,0], 0.0, None )
+                # self.params[3] = np.clip( self.params[3] - lr*0.1 * np.clip( grads[3], -1.0, 1.0 ), 0.0, None )
+                # self.params[4] = np.clip( self.params[4] - lr*0.1 * np.clip( grads[4], -1.0, 1.0 ), 0.0, None )
+
+                iters += 1
         else:
             mus, covs = FORESEE_CBF_QP_COV.predict(jnp.copy(self.params), jnp.copy(obs.reshape(-1,1)), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
                     
@@ -549,13 +563,13 @@ class FORESEE_CBF_QP_COV(MPC):
         print(f"************************************************* time: {time.time()-t0} *********************************************")
         print(f"*************** params: {self.params}")
 
-        state_covariances = np.zeros((self.T+1, nx, nx))
-        mus = np.asarray(mus)
-        covs = np.asarray(covs)
-        for i in range(covs.shape[1]):
-            state_covariances[i] = np.diag( covs[:,i] )
-        self.results_dict['state_horizon_cov'].append(state_covariances)
-        self.results_dict['horizon_states'].append( mus )
+        # state_covariances = np.zeros((self.T+1, nx, nx))
+        # mus = np.asarray(mus)
+        # covs = np.asarray(covs)
+        # for i in range(covs.shape[1]):
+        #     state_covariances[i] = np.diag( covs[:,i] )
+        # self.results_dict['state_horizon_cov'].append(state_covariances)
+        # self.results_dict['horizon_states'].append( mus )
         self.results_dict['casadi_horizon_states'].append( casadi_states )
         self.results_dict['jax_horizon_states'].append( jax_states )
         # pdb.set_trace()

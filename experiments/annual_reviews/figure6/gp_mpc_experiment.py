@@ -62,29 +62,29 @@ def plot_xz_comparison_diag_constraint(prior_run,
     x_goal = jnp.array([0, 1.0]).reshape(-1,1)
     rewards = reward( run.obs.T, x_goal )
 
-    # fig2, ax2 = plt.subplots(2,2)
-    # ax2[0,0].plot( run.obs[:,4], 'k*-', label=r'$\theta$' )
-    # ax2[0,0].legend()
+    fig2, ax2 = plt.subplots(2,2)
+    ax2[0,0].plot( run.obs[:,4], 'k*-', label=r'$\theta$' )
+    ax2[0,0].legend()
 
-    # # fig3, ax3 = plt.subplots()
-    # ax2[0,1].plot( run.action[:,0], 'r-*', label='T1' )
-    # ax2[0,1].plot( run.action[:,1], 'b-*', label='T2' )
-    # ax2[0,1].legend()
+    # fig3, ax3 = plt.subplots()
+    ax2[0,1].plot( run.action[:,0], 'r-*', label='T1' )
+    ax2[0,1].plot( run.action[:,1], 'b-*', label='T2' )
+    ax2[0,1].legend()
 
-    # # fig4, ax4 = plt.subplots()
-    # ax2[1,0].plot( run.obs[:,0], 'r-*', label='x' )
-    # ax2[1,0].plot( run.obs[:,2], 'b-*', label='z' )
-    # ax2[1,0].set_title(f"Reward = {rewards}")
-    # ax2[1,0].legend()
+    # fig4, ax4 = plt.subplots()
+    ax2[1,0].plot( run.obs[:,0], 'r-*', label='x' )
+    ax2[1,0].plot( run.obs[:,2], 'b-*', label='z' )
+    ax2[1,0].set_title(f"Reward = {rewards}")
+    ax2[1,0].legend()
 
-    # # pdb.set_trace()
-    # # fig5, ax5 = plt.subplots()
-    # ax2[1,1].plot( run.params[:,0], 'r-*', label='kx' )
-    # ax2[1,1].plot( run.params[:,1], 'b-*', label='kv' )
-    # ax2[1,1].plot( run.params[:,2], 'c-*', label='krx' )
-    # # ax5.plot( run.params[:,3], 'm-*', label='kR' )
-    # # ax5.plot( run.params[:,4], 'k-*', label='kRv' )
-    # ax2[1,1].legend()
+    # pdb.set_trace()
+    # fig5, ax5 = plt.subplots()
+    ax2[1,1].plot( run.params[:,0], 'r-*', label='kx' )
+    ax2[1,1].plot( run.params[:,1], 'b-*', label='kv' )
+    ax2[1,1].plot( run.params[:,2], 'c-*', label='krx' )
+    # ax5.plot( run.params[:,3], 'm-*', label='kR' )
+    # ax5.plot( run.params[:,4], 'k-*', label='kRv' )
+    ax2[1,1].legend()
 
     return ax
 
@@ -287,7 +287,7 @@ if __name__ == "__main__":
     print("Press any key to continue.. ")
     if not config.train_only:
         # Run with the learned gp model.
-        steps = 50
+        steps = 30
         run_results = ctrl.run(env=test_env,
                                max_steps=steps)  #50)
         ctrl.close()
