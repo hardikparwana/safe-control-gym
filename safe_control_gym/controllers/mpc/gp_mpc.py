@@ -612,6 +612,12 @@ class GPMPC(MPC):
         self.test_data = {'test_inputs': test_inputs, 'test_targets': test_targets}
 
 
+        with open('gp_train_data2.npy', 'wb') as f:
+                np.save(f, train_inputs)
+                np.save(f, train_targets)
+                np.save(f, test_inputs)
+                np.save(f, test_targets)
+
         train_inputs_tensor = torch.Tensor(train_inputs).double()
         train_targets_tensor = torch.Tensor(train_targets).double()
         test_inputs_tensor = torch.Tensor(test_inputs).double()

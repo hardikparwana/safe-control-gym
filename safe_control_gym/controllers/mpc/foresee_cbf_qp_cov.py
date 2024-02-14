@@ -159,7 +159,7 @@ class FORESEE_CBF_QP_COV(MPC):
      
         self.adapt = True
         # self.adapt = False
-        self.num_adapt_iterations = 15
+        self.num_adapt_iterations = 10 #15
         self.get_new_data = False
 
         self.params = np.array([ kx, kv, krx, kR, kRv ])
@@ -238,6 +238,7 @@ class FORESEE_CBF_QP_COV(MPC):
         # self.create_sparse_GP_machinery()
 
     @staticmethod
+    @jit
     def controller(params, X, x_goal, A, bc):
 
             p = jnp.array([ X[0,0], X[2,0] ]).reshape(-1,1)
@@ -453,6 +454,23 @@ class FORESEE_CBF_QP_COV(MPC):
         const = [ self.cb + self.cA @ self.co >= 0 ]
         obj = cp.Minimize( cp.sum_squares(self.co) - 2 * self.cG @ self.co )
         self.prob = cp.Problem(obj, const)
+
+
+        # solve once to do JIT
+        x_goal = self.env.X_GOAL.reshape(-1,1)
+        A, B, dt = self.prior_ctrl.dfdx, self.prior_ctrl.dfdu, self.dt
+        x_eq = self.prior_ctrl.X_LIN[:,None].reshape(-1,1)
+        u_eq = self.prior_ctrl.U_LIN[:,None].reshape(-1,1)
+        obs = jnp.array([-1,0,0,0,0,0])
+        action = FORESEE_CBF_QP_COV.controller(self.params, jnp.copy(obs.reshape(-1,1)), x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
+        mus, covs = FORESEE_CBF_QP_COV.predict(jnp.copy(self.params), jnp.copy(obs.reshape(-1,1)), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
+        reward, grads = FORESEE_CBF_QP_COV.predict_grad( jnp.copy(self.params), jnp.copy(obs.reshape(-1,1)), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b )
+        const = FORESEE_CBF_QP_COV.constraint_func( jnp.copy(self.params), jnp.copy(obs.reshape(-1,1)), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b )
+        cons, cons_grads = FORESEE_CBF_QP_COV.constraint_grad( jnp.copy(self.params), jnp.copy(obs.reshape(-1,1)), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b )
+        # print(f"rewards: {reward}, gras:{grads}")
+        
+
+
         return
         
         ########################################################
@@ -475,10 +493,10 @@ class FORESEE_CBF_QP_COV(MPC):
         print(f"time step: {self.dt}")
         x_goal = self.env.X_GOAL.reshape(-1,1) #jnp.array([-1.0, 0.0]).reshape(-1,1)  #jnp.array([-0.7, 0.5]).reshape(-1,1)  # 
         # Select current action
-        z = np.append( jnp.copy(obs.reshape(-1,1)), np.zeros((2,1)), axis=0 )
-        muj, covj = self.gaussian_process.jax_predict(z=z)     
-        mup, covp = self.gaussian_process.predict(z.T, return_pred=False)
-        action = FORESEE_CBF_QP_COV.controller(self.params, jnp.copy(obs.reshape(-1,1)), x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
+        # z = np.append( jnp.copy(obs.reshape(-1,1)), np.zeros((2,1)), axis=0 )
+        # muj, covj = self.gaussian_process.jax_predict(z=z)     
+        # mup, covp = self.gaussian_process.predict(z.T, return_pred=False)
+        # action = FORESEE_CBF_QP_COV.controller(self.params, jnp.copy(obs.reshape(-1,1)), x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
         # pdb.set_trace()
         # pdb.set_trace()
         # Update parameters
@@ -491,28 +509,29 @@ class FORESEE_CBF_QP_COV(MPC):
         # pdb.set_trace()
         # print(f"A; {A} \n B:{B}, \n x_eq: {x_eq}, \n u_eq: {u_eq}")
         # exit()
-        mus, covs = FORESEE_CBF_QP_COV.predict(jnp.copy(self.params), jnp.copy(obs.reshape(-1,1)), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
-        reward, grads = FORESEE_CBF_QP_COV.predict_grad( jnp.copy(self.params), jnp.copy(obs.reshape(-1,1)), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b )
-        const = FORESEE_CBF_QP_COV.constraint_func( jnp.copy(self.params), jnp.copy(obs.reshape(-1,1)), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b )
-        print(f"rewards: {reward}, gras:{grads}")
         
-        state_covariances = np.zeros((self.T+1, nx, nx))
-        mus = np.asarray(mus)
-        covs = np.asarray(covs)
-        for i in range(covs.shape[1]):
-            state_covariances[i] = np.diag( covs[:,i] )
-        self.results_dict['state_horizon_cov'].append(state_covariances)
-        self.results_dict['horizon_states'].append( mus )
-        # pdb.set_trace()
+        # reward, grads = FORESEE_CBF_QP_COV.predict_grad( jnp.copy(self.params), jnp.copy(obs.reshape(-1,1)), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b )
+        # const = FORESEE_CBF_QP_COV.constraint_func( jnp.copy(self.params), jnp.copy(obs.reshape(-1,1)), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b )
+        # print(f"rewards: {reward}, gras:{grads}")
+        
+        # mus, covs = FORESEE_CBF_QP_COV.predict(jnp.copy(self.params), jnp.copy(obs.reshape(-1,1)), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
+        # state_covariances = np.zeros((self.T+1, nx, nx))
+        # mus = np.asarray(mus)
+        # covs = np.asarray(covs)
+        # for i in range(covs.shape[1]):
+        #     state_covariances[i] = np.diag( covs[:,i] )
+        # self.results_dict['state_horizon_cov'].append(state_covariances)
+        # self.results_dict['horizon_states'].append( mus )
 
         t0 = time.time()
         
         if self.adapt:
-            print(f"HELLOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO")
+            # print(f"HELLOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO")
             # for i in range(self.num_adapt_iterations):
             iters = 0
             cons  = -0.1
             while (iters < self.num_adapt_iterations) or (cons<0):
+                t0 = time.time()
                 mus, covs = FORESEE_CBF_QP_COV.predict(jnp.copy(self.params), jnp.copy(obs.reshape(-1,1)), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
                 reward, grads = FORESEE_CBF_QP_COV.predict_grad( jnp.copy(self.params), jnp.copy(obs.reshape(-1,1)), A, B, x_eq, u_eq, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b )
                 grads = np.asarray(grads)
@@ -540,7 +559,6 @@ class FORESEE_CBF_QP_COV(MPC):
                     self.cA.value = np.zeros((1,3))
                     self.cb.value[0,0] = 0
                     self.prob.solve()
-                    print(f"Constraint violated !!!!!!  ")
                     # exit()
 
                 self.params[0] = np.clip( self.params[0] + self.co.value[0,0], 0.0, None )
@@ -548,6 +566,7 @@ class FORESEE_CBF_QP_COV(MPC):
                 self.params[2] = np.clip( self.params[2] + self.co.value[2,0], 0.0, None )
                 # self.params[3] = np.clip( self.params[3] - lr*0.1 * np.clip( grads[3], -1.0, 1.0 ), 0.0, None )
                 # self.params[4] = np.clip( self.params[4] - lr*0.1 * np.clip( grads[4], -1.0, 1.0 ), 0.0, None )
+                print(f"time: {time.time()-t0}")
 
                 iters += 1
         else:
@@ -556,12 +575,12 @@ class FORESEE_CBF_QP_COV(MPC):
         # Choose action after parameter update
         action = FORESEE_CBF_QP_COV.controller(self.params, jnp.copy(obs.reshape(-1,1)), x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
 
-        casadi_states = self.casadi_predict(obs.reshape(-1,1), T, self.params, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
-        jax_states = self.jax_predict(obs.reshape(-1,1), T, self.params, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b, A, B, x_eq, u_eq)
-        jax_states = np.asarray(jax_states)
+        # casadi_states = self.casadi_predict(obs.reshape(-1,1), T, self.params, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b)
+        # jax_states = self.jax_predict(obs.reshape(-1,1), T, self.params, x_goal, self.constraints.state_constraints[1].A, self.constraints.state_constraints[1].b, A, B, x_eq, u_eq)
+        # jax_states = np.asarray(jax_states)
         # pdb.set_trace()
-        print(f"************************************************* time: {time.time()-t0} *********************************************")
-        print(f"*************** params: {self.params}")
+        # print(f"************************************************* time: {time.time()-t0} *********************************************")
+        # print(f"*************** params: {self.params}")
 
         # state_covariances = np.zeros((self.T+1, nx, nx))
         # mus = np.asarray(mus)
@@ -570,8 +589,12 @@ class FORESEE_CBF_QP_COV(MPC):
         #     state_covariances[i] = np.diag( covs[:,i] )
         # self.results_dict['state_horizon_cov'].append(state_covariances)
         # self.results_dict['horizon_states'].append( mus )
-        self.results_dict['casadi_horizon_states'].append( casadi_states )
-        self.results_dict['jax_horizon_states'].append( jax_states )
+
+
+        # self.results_dict['casadi_horizon_states'].append( casadi_states )
+        # self.results_dict['jax_horizon_states'].append( jax_states )
+
+
         # pdb.set_trace()
         return action, jnp.copy(self.params)       
 
